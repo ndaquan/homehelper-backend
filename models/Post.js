@@ -80,7 +80,7 @@ static async findById(id) {
     const {
       page = 1,
       limit = 10,
-      // Default to approved posts
+      // Default to approved posts; if caller passes '' or 'all', disable status filter
       status = 'Approved',
       search = '',
       user_id = null,
@@ -108,21 +108,22 @@ static async findById(id) {
     `;
     const params = [];
 
-    // Filter by status
-    if (status) {
+    // Filter by status: if status is undefined use default 'Approved'; if empty string or 'all', skip filtering
+    const normalizedStatus = (status || '').toString().trim();
+    if (normalizedStatus && normalizedStatus.toLowerCase() !== 'all') {
       // Support both English and legacy Vietnamese values for compatibility
       const vnMap = {
         'Approved': 'Đã phê duyệt',
         'Pending': 'Chờ xử lý',
         'Rejected': 'Bị từ chối'
       };
-      const vn = vnMap[status] || null;
+      const vn = vnMap[normalizedStatus] || null;
       if (vn) {
         query += ' AND (p.status = @param' + (params.length + 1) + ' OR p.status = @param' + (params.length + 2) + ')';
-        params.push(status, vn);
+        params.push(normalizedStatus, vn);
       } else {
         query += ' AND p.status = @param' + (params.length + 1);
-        params.push(status);
+        params.push(normalizedStatus);
       }
     }
 
@@ -162,19 +163,19 @@ static async findById(id) {
       let countQuery = 'SELECT COUNT(*) as total FROM Posts p WHERE 1=1';
       const countParams = [];
       
-      if (status) {
+      if (normalizedStatus && normalizedStatus.toLowerCase() !== 'all') {
         const vnMap = {
           'Approved': 'Đã phê duyệt',
           'Pending': 'Chờ xử lý',
           'Rejected': 'Bị từ chối'
         };
-        const vn = vnMap[status] || null;
+        const vn = vnMap[normalizedStatus] || null;
         if (vn) {
           countQuery += ' AND (p.status = @param' + (countParams.length + 1) + ' OR p.status = @param' + (countParams.length + 2) + ')';
-          countParams.push(status, vn);
+          countParams.push(normalizedStatus, vn);
         } else {
           countQuery += ' AND p.status = @param' + (countParams.length + 1);
-          countParams.push(status);
+          countParams.push(normalizedStatus);
         }
       }
       

@@ -11,6 +11,7 @@ const getPosts = async (req, res) => {
       page = 1,
       limit = 10,
       search = '',
+      status, // allow client to control status filter; empty string disables default
       user_id = null,
       sortBy = 'post_date',
       sortOrder = 'DESC'
@@ -20,6 +21,9 @@ const getPosts = async (req, res) => {
       page: parseInt(page),
       limit: parseInt(limit),
       search,
+      // Only include status if provided; undefined means use model default ('Approved'),
+      // empty string '' will override and disable the filter in the model logic
+      ...(typeof status !== 'undefined' ? { status } : {}),
       user_id,
       sortBy,
       sortOrder

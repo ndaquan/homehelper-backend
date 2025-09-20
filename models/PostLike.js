@@ -18,21 +18,41 @@ class PostLike {
       throw new Error('User đã like bài đăng này rồi');
     }
 
-    const query = `
-      INSERT INTO PostLikes (post_id, user_id, liked_at)
-      VALUES (@param1, @param2, GETDATE());
-      
-      SELECT SCOPE_IDENTITY() AS post_like_id;
-    `;
-    
     try {
-      const result = await executeQuery(query, [post_id, user_id]);
-      const likeId = result.recordset[0].post_like_id;
-      
-      // Cập nhật số lượng likes trong bảng Posts
+      // Kiểm tra cột post_like_id có phải IDENTITY không
+      const identityCheckQuery = `SELECT COLUMNPROPERTY(OBJECT_ID('PostLikes'), 'post_like_id', 'IsIdentity') AS is_identity`;
+      const identityResult = await executeQuery(identityCheckQuery);
+      const isIdentity =
+        identityResult.recordset &&
+        identityResult.recordset[0] &&
+        identityResult.recordset[0].is_identity === 1;
+
+      if (isIdentity) {
+        const query = `
+          INSERT INTO PostLikes (post_id, user_id, liked_at)
+          OUTPUT INSERTED.*
+          VALUES (@param1, @param2, GETDATE())
+        `;
+        const result = await executeQuery(query, [post_id, user_id]);
+        const created = result.recordset[0];
+        await PostLike.updatePostLikesCount(post_id);
+        return new PostLike(created);
+      }
+
+      // Không phải IDENTITY: tự sinh khóa chính
+      const nextIdQuery = `SELECT ISNULL(MAX(post_like_id), 0) + 1 AS next_id FROM PostLikes`;
+      const nextIdResult = await executeQuery(nextIdQuery);
+      const nextId = nextIdResult.recordset[0].next_id;
+
+      const query = `
+        INSERT INTO PostLikes (post_like_id, post_id, user_id, liked_at)
+        OUTPUT INSERTED.*
+        VALUES (@param1, @param2, @param3, GETDATE())
+      `;
+      const result = await executeQuery(query, [nextId, post_id, user_id]);
+      const created = result.recordset[0];
       await PostLike.updatePostLikesCount(post_id);
-      
-      return await PostLike.findById(likeId);
+      return new PostLike(created);
     } catch (error) {
       throw new Error(`Error creating post like: ${error.message}`);
     }
@@ -240,7 +260,7 @@ class PostLike {
       FROM Posts p
       LEFT JOIN PostLikes pl ON p.post_id = pl.post_id
       LEFT JOIN Users u ON p.user_id = u.user_id
-      WHERE p.status = 'Đã phê duyệt'
+      WHERE (p.status = 'Approved' OR p.status = N'Đã phê duyệt')
       GROUP BY p.post_id, p.title, p.content, p.post_date, u.name
       ORDER BY total_likes DESC
     `;

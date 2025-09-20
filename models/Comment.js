@@ -19,16 +19,40 @@ class Comment {
       parent_comment_id = null,
       content
     } = commentData;
-
-    const query = `
-      INSERT INTO Comments (post_id, user_id, parent_comment_id, content, created_at, updated_at)
-      VALUES (@param1, @param2, @param3, @param4, GETDATE(), GETDATE());
-      
-      SELECT SCOPE_IDENTITY() AS comment_id;
-    `;
     
     try {
-      const result = await executeQuery(query, [post_id, user_id, parent_comment_id, content]);
+      // Kiểm tra comment_id có phải IDENTITY không
+      const identityCheckQuery = `SELECT COLUMNPROPERTY(OBJECT_ID('Comments'), 'comment_id', 'IsIdentity') AS is_identity`;
+      const identityResult = await executeQuery(identityCheckQuery);
+      const isIdentity =
+        identityResult.recordset &&
+        identityResult.recordset[0] &&
+        identityResult.recordset[0].is_identity === 1;
+
+      if (isIdentity) {
+        const insertIdentity = `
+          INSERT INTO Comments (post_id, user_id, parent_comment_id, content, created_at, updated_at)
+          OUTPUT INSERTED.comment_id
+          VALUES (@param1, @param2, @param3, @param4, GETDATE(), GETDATE())
+        `;
+        const result = await executeQuery(insertIdentity, [post_id, user_id, parent_comment_id, content]);
+        const commentId = result.recordset[0].comment_id;
+        // Cập nhật số lượng comments trong bảng Posts
+        await Comment.updatePostCommentsCount(post_id);
+        return await Comment.findById(commentId);
+      }
+
+      // Không phải IDENTITY: tự sinh comment_id
+      const nextIdQuery = `SELECT ISNULL(MAX(comment_id), 0) + 1 AS next_id FROM Comments`;
+      const nextIdResult = await executeQuery(nextIdQuery);
+      const nextId = nextIdResult.recordset[0].next_id;
+
+      const insertManual = `
+        INSERT INTO Comments (comment_id, post_id, user_id, parent_comment_id, content, created_at, updated_at)
+        OUTPUT INSERTED.comment_id
+        VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE(), GETDATE())
+      `;
+      const result = await executeQuery(insertManual, [nextId, post_id, user_id, parent_comment_id, content]);
       const commentId = result.recordset[0].comment_id;
       
       // Cập nhật số lượng comments trong bảng Posts
@@ -319,7 +343,7 @@ static async findByPostId(postId, options = {}) {
       FROM Posts p
       LEFT JOIN Comments c ON p.post_id = c.post_id
       LEFT JOIN Users u ON p.user_id = u.user_id
-      WHERE p.status = 'Đã phê duyệt'
+      WHERE (p.status = 'Approved' OR p.status = N'Đã phê duyệt')
       GROUP BY p.post_id, p.title, p.content, p.post_date, u.name
       ORDER BY total_comments DESC
     `;
