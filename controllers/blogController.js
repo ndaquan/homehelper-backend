@@ -218,6 +218,15 @@ const deletePost = async (req, res) => {
       });
     }
 
+    // Authorization: only the owner (from JWT) can delete
+    const requesterId = req.user && (req.user.userId || req.user.user_id);
+    if (!requesterId || requesterId !== post.user_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not allowed to delete this post'
+      });
+    }
+
     await post.delete();
     
     res.json({

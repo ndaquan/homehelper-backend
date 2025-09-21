@@ -1,4 +1,4 @@
-const { executeQuery } = require('../config/database');
+const { executeQuery, getPool, sql } = require('../config/database');
 
 class Post {
   constructor(data) {
@@ -307,11 +307,37 @@ static async findById(id) {
 
   // Xóa bài đăng
   async delete() {
-    const query = 'DELETE FROM Posts WHERE post_id = @param1';
+    const pool = await getPool();
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
     try {
-      await executeQuery(query, [this.post_id]);
+      // Xóa likes trước
+      let req = new sql.Request(tx);
+      req.input('param1', this.post_id);
+      await req.query('DELETE FROM PostLikes WHERE post_id = @param1');
+
+      // Xóa comments: xóa reply trước rồi xóa comment cha
+      req = new sql.Request(tx);
+      req.input('param1', this.post_id);
+      await req.query('DELETE FROM Comments WHERE post_id = @param1 AND parent_comment_id IS NOT NULL');
+      req = new sql.Request(tx);
+      req.input('param1', this.post_id);
+      await req.query('DELETE FROM Comments WHERE post_id = @param1 AND parent_comment_id IS NULL');
+
+      // Xóa PostServices liên kết
+      req = new sql.Request(tx);
+      req.input('param1', this.post_id);
+      await req.query('DELETE FROM PostServices WHERE post_id = @param1');
+
+      // Cuối cùng xóa Post
+      req = new sql.Request(tx);
+      req.input('param1', this.post_id);
+      await req.query('DELETE FROM Posts WHERE post_id = @param1');
+
+      await tx.commit();
       return true;
     } catch (error) {
+      try { await tx.rollback(); } catch (e) {}
       throw new Error(`Error deleting post: ${error.message}`);
     }
   }
