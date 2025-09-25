@@ -233,6 +233,41 @@ class User {
       throw new Error(`Lỗi cập nhật password: ${error.message}`);
     }
   }
+
+  // Tìm kiếm user theo tên hoặc email (dùng cho tạo cuộc trò chuyện)
+  static async search(searchQuery, limit = 10, excludeUserId = null) {
+    try {
+      const params = [];
+      let paramIndex = 1;
+      let where = `WHERE 1=1`;
+
+      if (excludeUserId) {
+        where += ` AND user_id <> @param${paramIndex}`;
+        params.push(excludeUserId);
+        paramIndex++;
+      }
+
+      if (searchQuery && searchQuery.trim()) {
+        // Chỉ tìm theo tên
+        where += ` AND name LIKE '%' + @param${paramIndex} + '%'`;
+        params.push(searchQuery.trim());
+        paramIndex++;
+      }
+
+      const query = `
+        SELECT TOP (@param${paramIndex}) user_id, name, email, role, phone
+        FROM Users
+        ${where}
+        ORDER BY name ASC
+      `;
+      params.push(limit);
+
+      const result = await executeQuery(query, params);
+      return result.recordset || [];
+    } catch (error) {
+      throw new Error(`Lỗi tìm kiếm user: ${error.message}`);
+    }
+  }
 }
 
 module.exports = User;

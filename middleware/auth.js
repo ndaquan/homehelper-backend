@@ -8,6 +8,7 @@ const authenticateToken = async (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
+      console.log('No token provided');
       return res.status(401).json({
         error: 'Access token không được cung cấp'
       });
@@ -24,13 +25,15 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    // Thêm thông tin user vào request
+    // Thêm thông tin user vào request (chuẩn hóa cả 2 kiểu khóa)
     req.user = {
       userId: decoded.userId,
+      user_id: decoded.userId,
       role: decoded.role,
       email: user.email
     };
-
+    req.user.user_id = decoded.userId;
+    
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
@@ -80,7 +83,7 @@ const requireAdmin = authorizeRole('Admin');
 const requireTasker = authorizeRole('Tasker', 'Admin');
 
 // Middleware kiểm tra quyền customer
-const requireCustomer = authorizeRole('Customer', 'Admin');
+const requireCustomer = authorizeRole('Customer', 'Admin','User');
 
 // Middleware kiểm tra quyền user đã đăng nhập
 const requireAuth = (req, res, next) => {
