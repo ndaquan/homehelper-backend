@@ -27,6 +27,8 @@ function createTables() {
       password TEXT NOT NULL,
       role TEXT DEFAULT 'Customer',
       phone TEXT,
+      cccd_status TEXT DEFAULT 'Pending',
+      cccd_number TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
@@ -37,6 +39,57 @@ function createTables() {
       console.error('❌ Lỗi tạo bảng users:', err.message);
     } else {
       console.log('✅ Bảng users đã sẵn sàng');
+      // Bổ sung cột nếu DB cũ chưa có
+      db.all("PRAGMA table_info(users)", (e, rows) => {
+        if (e) return console.error('❌ PRAGMA users error:', e.message);
+        const cols = rows.map(r => r.name);
+        if (!cols.includes('cccd_status')) {
+          db.run("ALTER TABLE users ADD COLUMN cccd_status TEXT DEFAULT 'Pending'", (er) => {
+            if (er) console.warn('⚠️ Thêm cột cccd_status thất bại (có thể đã tồn tại):', er.message);
+            else console.log('➕ Đã thêm cột users.cccd_status');
+          });
+        }
+        if (!cols.includes('cccd_number')) {
+          db.run("ALTER TABLE users ADD COLUMN cccd_number TEXT", (er2) => {
+            if (er2) console.warn('⚠️ Thêm cột cccd_number thất bại (có thể đã tồn tại):', er2.message);
+            else console.log('➕ Đã thêm cột users.cccd_number');
+          });
+        }
+      });
+    }
+  });
+
+  const createIdCardsTable = `
+    CREATE TABLE IF NOT EXISTS id_cards (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      number TEXT NOT NULL,
+      full_name TEXT NOT NULL,
+      dob TEXT,
+      gender TEXT,
+      nationality TEXT,
+      place_of_origin TEXT,
+      place_of_residence TEXT,
+      issued_date TEXT,
+      features TEXT,
+      front_image_path TEXT,
+      back_image_path TEXT,
+      face_image_path TEXT,
+      ocr_text_front TEXT,
+      ocr_text_back TEXT,
+      verified INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(number),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+  `;
+
+  db.run(createIdCardsTable, (err) => {
+    if (err) {
+      console.error('❌ Lỗi tạo bảng id_cards:', err.message);
+    } else {
+      console.log('✅ Bảng id_cards đã sẵn sàng');
     }
   });
 }

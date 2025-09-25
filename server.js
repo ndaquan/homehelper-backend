@@ -1,7 +1,18 @@
+// Fix punycode deprecation warning
+try {
+  const punycode = require('punycode.js');
+  if (typeof global.punycode === 'undefined') {
+    global.punycode = punycode;
+  }
+} catch (e) {
+  console.warn('punycode.js not available, punycode deprecation warnings may appear');
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const path = require('path');
 require('dotenv').config();
 
 const { connectDB } = require('./config/database');
@@ -27,9 +38,11 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Middleware static files
 app.use('/uploads', express.static('uploads'));
+app.use('/public', express.static('public'));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/cccd', require('./routes/cccd'));
 // app.use('/api/users', require('./routes/users'));
 // app.use('/api/services', require('./routes/services'));
 // app.use('/api/bookings', require('./routes/bookings'));
@@ -45,6 +58,11 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV
   });
+});
+
+// Test OCR page
+app.get('/test-ocr', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'test-ocr.html'));
 });
 
 // 404 handler
