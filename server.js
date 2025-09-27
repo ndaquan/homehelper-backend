@@ -61,6 +61,8 @@ app.use("/api/tasker-profile", require("./routes/taskerProfile"));
 app.use("/api/bookings", require("./routes/bookings"));
 // app.use('/api/posts', require('./routes/posts'));
 app.use("/api/ratings", require("./routes/ratings"));
+app.use("/api/wishlists", require("./routes/wishlist"));
+
 // app.use('/api/feedbacks', require('./routes/feedbacks'));
 // app.use('/api/complaints', require('./routes/complaints'));
 // app.use('/api/notifications', require('./routes/notifications'));
@@ -78,7 +80,6 @@ app.use("/api/uploads", require("./routes/uploads"));
 // app.use('/api/users', require('./routes/users'));
 // app.use('/api/bookings', require('./routes/bookings'));
 // app.use('/api/posts', require('./routes/posts'));
-// app.use('/api/ratings', require('./routes/ratings'));
 
 // Health check endpoint
 app.get("/health", (req, res) => {

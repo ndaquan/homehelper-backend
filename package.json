@@ -23,6 +23,7 @@
     "@fortawesome/react-fontawesome": "^3.0.2",
     "axios": "^1.12.1",
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.7.0",
     "cors": "^2.8.5",
     "date-fns": "^4.1.0",
     "dotenv": "^16.3.1",

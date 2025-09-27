@@ -53,49 +53,30 @@ class Rating {
     rating,
     comment,
   }) {
-    // Một số DB có thể không dùng IDENTITY cho rating_id theo setup2.sql,
-    // nên cần kiểm tra và tự sinh rating_id khi cần.
     try {
-      const identityCheckQuery = `SELECT COLUMNPROPERTY(OBJECT_ID('Ratings'), 'rating_id', 'IsIdentity') AS is_identity`;
-      const identityResult = await executeQuery(identityCheckQuery);
-      const isIdentity =
-        identityResult.recordset &&
-        identityResult.recordset[0] &&
-        identityResult.recordset[0].is_identity === 1;
-
-      if (isIdentity) {
-        const query = `
-          INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, created_at)
-          OUTPUT INSERTED.*
-          VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE())
-        `;
-        const params = [booking_id, reviewer_id, reviewee_id, rating, comment];
-        const result = await executeQuery(query, params);
-        return result.recordset[0];
-      }
-
-      // Không phải IDENTITY: sinh thủ công next id
-      const nextIdQuery = `SELECT ISNULL(MAX(rating_id), 0) + 1 AS next_id FROM Ratings`;
-      const nextIdResult = await executeQuery(nextIdQuery);
-      const nextId = nextIdResult.recordset[0].next_id;
-
       const query = `
-        INSERT INTO Ratings (rating_id, booking_id, reviewer_id, reviewee_id, rating, comment, created_at)
-        OUTPUT INSERTED.*
-        VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE())
-      `;
-      const params = [
-        nextId,
-        booking_id,
-        reviewer_id,
-        reviewee_id,
-        rating,
-        comment,
-      ];
+      INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, created_at)
+      OUTPUT INSERTED.*
+      VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE())
+    `;
+      const params = [booking_id, reviewer_id, reviewee_id, rating, comment];
       const result = await executeQuery(query, params);
-      return result.recordset[0];
+      const newRating = result.recordset[0];
+
+      // 🔥 Sau khi insert -> cập nhật Taskers.rating = average rating
+      const updateQuery = `
+      UPDATE Taskers
+      SET rating = (
+        SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
+        FROM Ratings
+        WHERE reviewee_id = @param1
+      )
+      WHERE tasker_id = @param1
+    `;
+      await executeQuery(updateQuery, [reviewee_id]);
+
+      return newRating;
     } catch (error) {
-      // Thông điệp thân thiện với lỗi trùng lặp (UNIQUE(booking_id, reviewer_id))
       const msg = String(error.message || "");
       if (
         msg.includes("UNIQUE") ||
