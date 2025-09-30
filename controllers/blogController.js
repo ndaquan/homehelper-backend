@@ -178,7 +178,7 @@ const createPost = async (req, res) => {
 const updatePost = async (req, res) => {
   try {
     const { id } = req.params;
-    const updateData = req.body;
+    const updateData = req.body || {};
 
     const post = await Post.findById(id);
     if (!post) {
@@ -188,12 +188,66 @@ const updatePost = async (req, res) => {
       });
     }
 
+    // Authorization: only the owner (from JWT) can update
+    const requesterId = req.user && (req.user.userId || req.user.user_id);
+    if (!requesterId || requesterId !== post.user_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not allowed to update this post'
+      });
+    }
+
+    // Perform basic field update first (title/content/status/photo_urls/related_booking_id)
     const updatedPost = await post.update(updateData);
-    
-    res.json({
+
+    // Sync services if requested
+    const services = updateData.services; // optional array
+    const hasServicesField = Object.prototype.hasOwnProperty.call(updateData, 'services');
+    const hasRelatedBookingField = Object.prototype.hasOwnProperty.call(updateData, 'related_booking_id');
+
+    try {
+      if (hasServicesField) {
+        // If services provided (even empty array), replace existing PostServices with provided list
+        await PostService.deleteByPostId(post.post_id);
+        if (Array.isArray(services) && services.length > 0) {
+          await PostService.createMultiple(post.post_id, services);
+        }
+      } else if (hasRelatedBookingField) {
+        // If related_booking_id changed but no explicit services sent, rebuild from booking
+        await PostService.deleteByPostId(post.post_id);
+        const related_booking_id = updateData.related_booking_id;
+        if (related_booking_id) {
+          try {
+            const bookingQuery = `
+              SELECT service_id, variant_id
+              FROM Bookings
+              WHERE booking_id = @param1
+            `;
+            const bookingResult = await executeQuery(bookingQuery, [related_booking_id]);
+            const booking = bookingResult.recordset && bookingResult.recordset[0];
+            if (booking && booking.service_id) {
+              await PostService.create({
+                post_id: post.post_id,
+                service_id: booking.service_id,
+                variant_id: booking.variant_id || null,
+              });
+            }
+          } catch (e) {
+            console.warn('Could not rebuild services from booking during update:', e.message);
+          }
+        }
+      }
+    } catch (svcErr) {
+      console.error('Error syncing post services on update:', svcErr);
+      // Do not fail the entire update if services sync fails; return with warning
+    }
+
+    // Return the latest post state
+    const refreshed = await Post.findById(post.post_id);
+    return res.json({
       success: true,
       message: 'Post updated successfully',
-      data: updatedPost
+      data: refreshed
     });
   } catch (error) {
     console.error('Error updating post:', error);
@@ -215,6 +269,15 @@ const deletePost = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Post not found'
+      });
+    }
+
+    // Authorization: only the owner (from JWT) can delete
+    const requesterId = req.user && (req.user.userId || req.user.user_id);
+    if (!requesterId || requesterId !== post.user_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not allowed to delete this post'
       });
     }
 

@@ -5,6 +5,9 @@ const User = require('../models/User');
 const authenticateToken = async (req, res, next) => {
   try {
     const authHeader = req.headers['authorization'];
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('🔐 Auth header:', authHeader || '(none)');
+    }
     const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
     if (!token) {
@@ -16,9 +19,15 @@ const authenticateToken = async (req, res, next) => {
 
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('🔓 Decoded JWT:', decoded);
+    }
     
     // Kiểm tra user có tồn tại không
     const user = await User.findById(decoded.userId);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('👤 DB user by decoded.userId:', user ? { user_id: user.user_id, email: user.email, role: user.role } : null);
+    }
     if (!user) {
       return res.status(401).json({
         error: 'Token không hợp lệ - User không tồn tại'
@@ -27,12 +36,12 @@ const authenticateToken = async (req, res, next) => {
 
     // Thêm thông tin user vào request (chuẩn hóa cả 2 kiểu khóa)
     req.user = {
+      id: decoded.userId,
       userId: decoded.userId,
       user_id: decoded.userId,
       role: decoded.role,
       email: user.email
     };
-    req.user.user_id = decoded.userId;
     
     next();
   } catch (error) {

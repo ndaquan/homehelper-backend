@@ -13,6 +13,9 @@ router.delete('/address/:address_id', authenticateToken, requireAuth, taskerCont
 // GET /api/taskers
 router.get("/", taskerController.getAll);
 
+// GET /api/taskers/by-variant/:variantId
+router.get("/by-variant/:variantId", taskerController.getByVariant);
+
 // GET /api/taskers/:id
 router.get("/:id", taskerController.getById);
 
