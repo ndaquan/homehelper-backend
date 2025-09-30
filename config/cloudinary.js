@@ -68,10 +68,46 @@ if (CloudinaryStorage) {
 // Fallback: memory storage for manual upload_stream usage in routes (if CloudinaryStorage not installed)
 const memoryUpload = multer({ storage: multer.memoryStorage() });
 
+const videoStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req, file) => {
+    const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+    return {
+      folder: `${CLOUDINARY_FOLDER_BASE}/videos/${userId}`,
+      allowed_formats: ['mp4', 'mov', 'avi', 'mkv'],
+      resource_type: 'video',
+    };
+  },
+});
+
+const videoUpload = multer({
+  storage: videoStorage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('video/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files are allowed'), false);
+    }
+  },
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB
+  },
+});
+
+const deleteFile = async (publicId, resourceType = 'image') => {
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    return true;
+  } catch (error) {
+    throw new Error(`Failed to delete file from Cloudinary: ${error.message}`);
+  }
+};
 module.exports = {
   cloudinary,
   // Prefer these if multer-storage-cloudinary is installed; otherwise use memoryUpload in routes
   avatarUpload,
   postImagesUpload,
   memoryUpload,
+  videoUpload,
+  deleteFile,
 };
