@@ -56,6 +56,21 @@ exports.getById = async (req, res) => {
     });
   }
 };
+
+// Lấy taskers theo variant_id
+exports.getByVariant = async (req, res) => {
+  try {
+    const { variantId } = req.params;
+    if (!variantId) {
+      return res.status(400).json({ success: false, message: 'Thiếu variantId' });
+    }
+    const taskers = await Tasker.findByVariant(variantId);
+    res.json({ success: true, data: taskers });
+  } catch (error) {
+    console.error('❌ Lỗi getByVariant taskers:', error);
+    res.status(500).json({ success: false, message: 'Lỗi khi lấy taskers theo biến thể', error: error.message });
+  }
+};
 // Tạo địa chỉ (giữ nguyên)
 exports.createAddress = async (req, res) => {
   try {
