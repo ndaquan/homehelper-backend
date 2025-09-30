@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Tasker = require('../models/Tasker');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const Notification = require('../models/Notification');
@@ -50,7 +51,7 @@ class SocketHandler {
 
   // Thiết lập các event handlers
   setupEventHandlers() {
-  this.io.on('connection', (socket) => {
+  this.io.on('connection', async (socket) => {
       // Lưu thông tin kết nối
       if (!this.connectedUsers.has(socket.userId)) {
         this.connectedUsers.set(socket.userId, new Set());
@@ -65,6 +66,15 @@ class SocketHandler {
 
     // Gửi thông báo user online
     this.broadcastUserStatus(socket.userId, 'online');
+
+    // Nếu user là Tasker thì cập nhật trạng thái "Hoạt động"
+    try {
+      if (socket.user?.role === 'Tasker') {
+        await Tasker.updateStatus(socket.userId, 'Hoạt động');
+      }
+    } catch (e) {
+      console.error('Không thể cập nhật trạng thái Tasker khi connect:', e?.message || e);
+    }
 
     // Gửi danh sách user online cho riêng socket mới connect
     console.log(`📤 Emit online_users cho user ${socket.userId}`);
@@ -293,7 +303,7 @@ class SocketHandler {
   }
 
   // Disconnect
-  handleDisconnect(socket) {
+  async handleDisconnect(socket) {
     try {
       const userId = socket.userId;
       const sockets = this.connectedUsers.get(userId);
@@ -302,6 +312,14 @@ class SocketHandler {
         if (sockets.size === 0) {
           this.connectedUsers.delete(userId);
           this.broadcastUserStatus(userId, 'offline');
+          // Nếu user là Tasker và không còn kết nối nào thì cập nhật "Không hoạt động"
+          try {
+            if (socket.user?.role === 'Tasker') {
+              await Tasker.updateStatus(userId, 'Không hoạt động');
+            }
+          } catch (e) {
+            console.error('Không thể cập nhật trạng thái Tasker khi disconnect:', e?.message || e);
+          }
         }
       }
   this.userSockets.delete(socket.id);

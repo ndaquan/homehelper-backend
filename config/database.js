@@ -4,7 +4,7 @@ require("dotenv").config();
 // Cấu hình kết nối SQL Server
 const dbConfig = {
   server: process.env.DB_SERVER || 'localhost',
-  database: process.env.DB_DATABASE || 'HomeHelperDB3',
+  database: process.env.DB_DATABASE || 'HomeHelperDB',
   user: process.env.DB_USER || 'sa',
   password: process.env.DB_PASSWORD || '123456789',
   port: parseInt(process.env.DB_PORT || '1433', 10),
@@ -59,7 +59,7 @@ async function closeDB() {
 }
 
 // Hàm thực thi query
-async function executeQuery(query, params = []) {
+async function executeQuery(query, params = {}) {
   try {
     // Đảm bảo pool đã kết nối
     if (!pool || !pool.connected) {
@@ -69,10 +69,16 @@ async function executeQuery(query, params = []) {
 
     const request = pool.request();
 
-    // Bind parameters nếu có
-    params.forEach((param, index) => {
-      request.input(`param${index + 1}`, param);  
-    });
+    // Bind parameters nếu có (hỗ trợ cả object và array)
+    if (Array.isArray(params)) {
+      params.forEach((param, index) => {
+        request.input(`param${index + 1}`, param);  
+      });
+    } else if (typeof params === 'object' && params !== null) {
+      Object.entries(params).forEach(([key, value]) => {
+        request.input(key, value);
+      });
+    }
 
     const result = await request.query(query);
     return result;
@@ -100,10 +106,44 @@ async function executeStoredProcedure(procName, params = []) {
   }
 }
 
+// Hàm thực thi query INSERT/UPDATE/DELETE
+async function executeNonQuery(query, params = {}) {
+  try {
+    // Đảm bảo pool đã được khởi tạo
+    if (!pool) {
+      await connectDB();
+    }
+    
+    const request = pool.request();
+
+    // Bind parameters nếu có
+    Object.entries(params).forEach(([key, value]) => {
+      request.input(key, value);
+    });
+
+    const result = await request.query(query);
+    
+    // Lấy IDENTITY value từ SCOPE_IDENTITY()
+    const identityResult = await request.query('SELECT SCOPE_IDENTITY() as id');
+    const insertId = identityResult.recordset && identityResult.recordset.length > 0 
+      ? identityResult.recordset[0].id 
+      : null;
+    
+    return {
+      changes: result.rowsAffected[0],
+      insertId: insertId
+    };
+  } catch (error) {
+    console.error("❌ Lỗi thực thi non-query:", error);
+    throw error;
+  }
+}
+
 module.exports = {
   connectDB,
   closeDB,
   executeQuery,
+  executeNonQuery,
   executeStoredProcedure,
   getPool,   // ✅ export
   sql,

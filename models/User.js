@@ -1,62 +1,17 @@
-const { executeQuery, executeStoredProcedure } = require('../config/database');
+const { executeQuery, executeNonQuery } = require('../config/database');
 const bcrypt = require('bcryptjs');
 
 class User {
-  // Tạo user mới
-  static async create(userData) {
-    try {
-      const { name, email, password, role, phone } = userData;
-      
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 12);
-      
-      const query = `
-        INSERT INTO Users (name, email, password, role, phone, created_at, updated_at)
-        VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE(), GETDATE());
-        
-        SELECT SCOPE_IDENTITY() AS user_id;
-      `;
-      
-      const params = [name, email, hashedPassword, role, phone];
-      const result = await executeQuery(query, params);
-      
-      // Debug: log kết quả để xem format
-      console.log('🔍 Result from create:', JSON.stringify(result, null, 2));
-      
-      // Kiểm tra và xử lý kết quả
-      let userId;
-      if (result && result.recordset && result.recordset.length > 0) {
-        userId = result.recordset[0].user_id;
-      } else if (result && result.rowsAffected && result.rowsAffected[0] > 0) {
-        // Nếu INSERT thành công nhưng không có SELECT, tạo ID tạm
-        userId = Date.now();
-      } else {
-        throw new Error('Không thể lấy user_id sau khi tạo');
-      }
-      
-      return {
-        user_id: userId,
-        name,
-        email,
-        role,
-        phone,
-        created_at: new Date()
-      };
-    } catch (error) {
-      throw new Error(`Lỗi tạo user: ${error.message}`);
-    }
-  }
-
   // Lấy user theo ID
   static async findById(userId) {
     try {
       const query = `
-        SELECT user_id, name, email, role, phone, created_at, updated_at
-        FROM Users 
-        WHERE user_id = @param1
+        SELECT user_id, name, email, role, phone, cccd_status, cccd_verified_at, created_at, updated_at
+        FROM users 
+        WHERE user_id = @userId
       `;
       
-      const result = await executeQuery(query, [userId]);
+      const result = await executeQuery(query, { userId });
       
       if (result.recordset.length === 0) {
         return null;
@@ -72,33 +27,18 @@ class User {
   static async findByEmail(email) {
     try {
       const query = `
-        SELECT user_id, name, email, password, role, phone, created_at, updated_at
-        FROM Users 
-        WHERE email = @param1
+        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, created_at, updated_at
+        FROM users 
+        WHERE email = @email
       `;
       
-      const result = await executeQuery(query, [email]);
+      const result = await executeQuery(query, { email });
       
-      // Debug: log kết quả để xem format
-      console.log('🔍 Result from findByEmail:', JSON.stringify(result, null, 2));
-      
-      // Kiểm tra và xử lý kết quả
-      if (!result) {
-        console.log('⚠️ Result is null or undefined');
+      if (result.recordset.length === 0) {
         return null;
       }
       
-      if (result.recordset && result.recordset.length > 0) {
-        return result.recordset[0];
-      }
-      
-      if (result.rowsAffected && result.rowsAffected[0] === 0) {
-        console.log('📭 Không tìm thấy user với email:', email);
-        return null;
-      }
-      
-      console.log('⚠️ Unexpected result format:', result);
-      return null;
+      return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi tìm user theo email: ${error.message}`);
     }
@@ -107,17 +47,15 @@ class User {
   // Cập nhật user
   static async update(userId, updateData) {
     try {
-      const allowedFields = ['name', 'phone'];
+      const allowedFields = ['name', 'phone', 'cccd_status', 'cccd_verified_at', 'cccd_verified_by'];
       const updates = [];
-      const params = [];
-      let paramIndex = 1;
+      const params = { userId };
 
       // Chỉ cho phép cập nhật các trường được phép
       for (const [field, value] of Object.entries(updateData)) {
         if (allowedFields.includes(field) && value !== undefined) {
-          updates.push(`${field} = @param${paramIndex}`);
-          params.push(value);
-          paramIndex++;
+          updates.push(`${field} = @${field}`);
+          params[field] = value;
         }
       }
 
@@ -126,15 +64,14 @@ class User {
       }
 
       updates.push('updated_at = GETDATE()');
-      params.push(userId);
 
       const query = `
-        UPDATE Users 
+        UPDATE users 
         SET ${updates.join(', ')}
-        WHERE user_id = @param${paramIndex}
+        WHERE user_id = @userId
       `;
 
-      await executeQuery(query, params);
+      await executeNonQuery(query, params);
       
       return await this.findById(userId);
     } catch (error) {
@@ -142,68 +79,59 @@ class User {
     }
   }
 
-  // Xóa user (soft delete)
-  static async delete(userId) {
+  // Cập nhật thông tin user từ CCCD đã xác minh
+  static async updateFromCCCD(userId, cccdData) {
     try {
+      const {
+        full_name,
+        cccd_url
+      } = cccdData;
+
       const query = `
-        UPDATE Users 
-        SET updated_at = GETDATE()
-        WHERE user_id = @param1
+        UPDATE users 
+        SET 
+          name = ISNULL(@full_name, name),
+          cccd_status = 'Đã xác minh',
+          cccd_verified_at = GETDATE(),
+          cccd_url = ISNULL(@cccd_url, cccd_url),
+          updated_at = GETDATE()
+        WHERE user_id = @userId
       `;
+
+      await executeNonQuery(query, { full_name, cccd_url, userId });
       
-      await executeQuery(query, [userId]);
-      return true;
+      return await this.findById(userId);
     } catch (error) {
-      throw new Error(`Lỗi xóa user: ${error.message}`);
+      throw new Error(`Lỗi cập nhật user từ CCCD: ${error.message}`);
     }
   }
 
-  // Lấy danh sách users với phân trang
-  static async findAll(page = 1, limit = 10, filters = {}) {
+  // Lấy thông tin user với CCCD
+  static async findByIdWithCCCD(userId) {
     try {
-      let whereClause = '';
-      const params = [];
-      let paramIndex = 1;
-
-      // Xử lý filters
-      if (filters.role) {
-        whereClause += ` WHERE role = @param${paramIndex}`;
-        params.push(filters.role);
-        paramIndex++;
-      }
-
-      if (filters.search) {
-        const searchCondition = whereClause ? ' AND ' : ' WHERE ';
-        whereClause += `${searchCondition} (name LIKE '%' + @param${paramIndex} + '%' OR email LIKE '%' + @param${paramIndex} + '%')`;
-        params.push(filters.search);
-        paramIndex++;
-      }
-
-      const offset = (page - 1) * limit;
-      
       const query = `
-        SELECT user_id, name, email, role, phone, created_at, updated_at
-        FROM Users 
-        ${whereClause}
-        ORDER BY created_at DESC
-        OFFSET @param${paramIndex} ROWS
-        FETCH NEXT @param${paramIndex + 1} ROWS ONLY;
-        
-        SELECT COUNT(*) AS total FROM Users ${whereClause};
+        SELECT 
+          u.user_id, u.name, u.email, u.role, u.phone, 
+          u.cccd_status, u.cccd_verified_at,
+          cv.cccd_number, cv.full_name as cccd_full_name, cv.date_of_birth, cv.gender,
+          cv.nationality, cv.place_of_origin, cv.place_of_residence,
+          cv.verification_status, cv.created_at as cccd_created_at
+        FROM users u
+        LEFT JOIN cccd_verification cv ON u.user_id = cv.user_id
+        WHERE u.user_id = @userId
+        ORDER BY cv.created_at DESC
       `;
       
-      params.push(offset, limit);
-      const result = await executeQuery(query, params);
+      const result = await executeQuery(query, { userId });
       
-      return {
-        users: result.recordset.slice(0, -1), // Loại bỏ record cuối (count)
-        total: result.recordset[result.recordset.length - 1].total,
-        page,
-        limit,
-        totalPages: Math.ceil(result.recordset[result.recordset.length - 1].total / limit)
-      };
+      if (result.recordset.length === 0) {
+        return null;
+      }
+      
+      return result.recordset[0];
+
     } catch (error) {
-      throw new Error(`Lỗi lấy danh sách users: ${error.message}`);
+      throw new Error(`Lỗi lấy thông tin user với CCCD: ${error.message}`);
     }
   }
 
@@ -216,56 +144,36 @@ class User {
     }
   }
 
-  // Cập nhật password
-  static async updatePassword(userId, newPassword) {
+  // Tạo user mới
+  static async create(userData) {
     try {
-      const hashedPassword = await bcrypt.hash(newPassword, 12);
+      const { name, email, password, role = 'Customer', phone } = userData;
+      
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 10);
       
       const query = `
-        UPDATE Users 
-        SET password = @param1, updated_at = GETDATE()
-        WHERE user_id = @param2
+        INSERT INTO users (name, email, password, role, phone, created_at, updated_at)
+        OUTPUT INSERTED.user_id, INSERTED.name, INSERTED.email, INSERTED.role
+        VALUES (@name, @email, @password, @role, @phone, GETDATE(), GETDATE())
       `;
       
-      await executeQuery(query, [hashedPassword, userId]);
-      return true;
-    } catch (error) {
-      throw new Error(`Lỗi cập nhật password: ${error.message}`);
-    }
-  }
-
-  // Tìm kiếm user theo tên hoặc email (dùng cho tạo cuộc trò chuyện)
-  static async search(searchQuery, limit = 10, excludeUserId = null) {
-    try {
-      const params = [];
-      let paramIndex = 1;
-      let where = `WHERE 1=1`;
-
-      if (excludeUserId) {
-        where += ` AND user_id <> @param${paramIndex}`;
-        params.push(excludeUserId);
-        paramIndex++;
+      const result = await executeQuery(query, {
+        name,
+        email,
+        password: hashedPassword,
+        role,
+        phone
+      });
+      
+      // Kiểm tra kết quả trả về
+      if (result.recordset && result.recordset.length > 0) {
+        return result.recordset[0];
+      } else {
+        throw new Error('Không thể lấy thông tin user vừa tạo');
       }
-
-      if (searchQuery && searchQuery.trim()) {
-        // Chỉ tìm theo tên
-        where += ` AND name LIKE '%' + @param${paramIndex} + '%'`;
-        params.push(searchQuery.trim());
-        paramIndex++;
-      }
-
-      const query = `
-        SELECT TOP (@param${paramIndex}) user_id, name, email, role, phone
-        FROM Users
-        ${where}
-        ORDER BY name ASC
-      `;
-      params.push(limit);
-
-      const result = await executeQuery(query, params);
-      return result.recordset || [];
     } catch (error) {
-      throw new Error(`Lỗi tìm kiếm user: ${error.message}`);
+      throw new Error(`Lỗi tạo user: ${error.message}`);
     }
   }
 }
