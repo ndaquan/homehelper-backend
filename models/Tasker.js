@@ -11,8 +11,8 @@ class Tasker {
         t.Introduce AS Introduce,
         t.certifications,
         t.status,
-        ISNULL(r.avg_rating, 0) AS rating,
-        ISNULL(r.review_count, 0) AS reviewsCount,
+        ISNULL(t.rating, 0) AS rating,
+        ISNULL(rc.review_count, 0) AS reviewsCount,
         s.service_id,
         s.name AS service_name,
         sv.variant_id,
@@ -26,12 +26,10 @@ class Tasker {
       LEFT JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
       LEFT JOIN Services s ON sv.service_id = s.service_id
       LEFT JOIN (
-        SELECT reviewee_id,
-               AVG(CAST(rating AS FLOAT)) AS avg_rating,
-               COUNT(*) AS review_count
+        SELECT reviewee_id, COUNT(*) AS review_count
         FROM Ratings
         GROUP BY reviewee_id
-      ) r ON t.tasker_id = r.reviewee_id
+      ) rc ON t.tasker_id = rc.reviewee_id
       WHERE 1=1
     `;
 
@@ -104,6 +102,98 @@ class Tasker {
       return [];
     }
   }
+
+  // Cập nhật trạng thái hoạt động của tasker
+  static async updateStatus(taskerId, status) {
+    try {
+      const query = `UPDATE Taskers SET status = @param1 WHERE tasker_id = @param2`;
+      await executeQuery(query, [status, taskerId]);
+      return true;
+    } catch (err) {
+      console.error('Lỗi cập nhật trạng thái Tasker:', err);
+      return false;
+    }
+  }
+  
+  // Lấy danh sách tasker theo variant_id (liên kết qua TaskerServiceVariants)
+  static async findByVariant(variantId) {
+    try {
+      const query = `
+        SELECT 
+          t.tasker_id,
+          u.name AS tasker_name,
+          u.email AS email,
+          t.Introduce AS Introduce,
+          t.certifications,
+          t.status,
+          ISNULL(t.rating, 0) AS rating,
+          ISNULL(rc.review_count, 0) AS reviewsCount,
+          s.service_id,
+          s.name AS service_name,
+          sv.variant_id,
+          sv.variant_name,
+          sv.price_min,
+          sv.price_max,
+          sv.unit
+        FROM Taskers t
+        JOIN Users u ON t.tasker_id = u.user_id
+        JOIN TaskerServiceVariants tsv ON t.tasker_id = tsv.tasker_id
+        JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+        JOIN Services s ON sv.service_id = s.service_id
+        LEFT JOIN (
+          SELECT reviewee_id, COUNT(*) AS review_count
+          FROM Ratings
+          GROUP BY reviewee_id
+        ) rc ON t.tasker_id = rc.reviewee_id
+        WHERE sv.variant_id = @param1
+        ORDER BY t.tasker_id`;
+
+      const result = await executeQuery(query, [variantId]);
+      const rows = result.recordset || [];
+
+      const taskersMap = {};
+      rows.forEach((row) => {
+        if (!taskersMap[row.tasker_id]) {
+          taskersMap[row.tasker_id] = {
+            tasker_id: row.tasker_id,
+            name: row.tasker_name,
+            Introduce: row.Introduce,
+            certifications: row.certifications,
+            rating: parseFloat(row.rating),
+            reviewsCount: row.reviewsCount,
+            email: row.email,
+            status: row.status,
+            services: [],
+          };
+        }
+
+        let service = taskersMap[row.tasker_id].services.find(
+          (s) => s.service_id === row.service_id
+        );
+        if (!service) {
+          service = {
+            service_id: row.service_id,
+            name: row.service_name,
+            variants: [],
+          };
+          taskersMap[row.tasker_id].services.push(service);
+        }
+        service.variants.push({
+          variant_id: row.variant_id,
+          variant_name: row.variant_name,
+          price_min: row.price_min,
+          price_max: row.price_max,
+          unit: row.unit,
+        });
+      });
+
+      return Object.values(taskersMap);
+    } catch (err) {
+      console.error('Lỗi findByVariant Taskers:', err);
+      return [];
+    }
+  }
+
   // lấy tasker theo id
 
   static async findById(id) {
