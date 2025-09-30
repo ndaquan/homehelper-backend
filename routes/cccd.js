@@ -1,33 +1,27 @@
 const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const controller = require('../controllers/idCardController');
-
 const router = express.Router();
+const { submit, getUserCccd, getLatestCccd, updateVerificationStatus, uploadCccd, getCCCDStatus, checkVerifiedCCCD, uploadFaceImage } = require('../controllers/idCardController');
+const { authenticateToken } = require('../middleware/auth');
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join('uploads', 'cccd');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '.jpg');
-    cb(null, `${Date.now()}_${file.fieldname}${ext}`);
-  }
-});
+// Submit CCCD để xác minh
+router.post('/submit', authenticateToken, uploadCccd, submit);
 
-const upload = multer({ storage });
+// Lấy danh sách CCCD của user
+router.get('/user', authenticateToken, getUserCccd);
 
-router.post('/submit', upload.fields([{ name: 'front', maxCount: 1 }, { name: 'back', maxCount: 1 }]), controller.submit);
-router.get('/user/:userId', controller.getByUser);
-router.post('/test-ocr', upload.fields([{ name: 'front', maxCount: 1 }, { name: 'back', maxCount: 1 }]), controller.testOCR);
+// Lấy CCCD mới nhất của user
+router.get('/latest', authenticateToken, getLatestCccd);
+
+// Lấy trạng thái CCCD của user
+router.get('/status', authenticateToken, getCCCDStatus);
+
+// Kiểm tra user đã có CCCD được duyệt chưa
+router.get('/verified', authenticateToken, checkVerifiedCCCD);
+
+// Cập nhật trạng thái xác minh (admin)
+router.put('/:cccdId/status', authenticateToken, updateVerificationStatus);
+
+// Upload ảnh mặt lên Cloudinary
+router.post('/upload-face', authenticateToken, uploadFaceImage);
 
 module.exports = router;
-
-
-
-
-
-

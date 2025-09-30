@@ -1,317 +1,586 @@
+const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const IDCard = require('../models/IDCard');
-const { ocrImageToText, parseVietnamIdCardText, cropBackMrzRegion, extractFieldsByTemplate, extractFieldsByPythonOCR, visionClient } = require('../utils/ocr');
-const { visionText, parseByLabelsVi } = require('../utils/vision');
-const { extractFaceFromFront } = require('../utils/face');
+const User = require('../models/User');
+const CCCD = require('../models/CCCD');
+const pythonOCR = require('../utils/pythonOcr');
 
-function compareFields(input, parsed) {
-  const normalize = (s) => (s || '').toString().trim().replace(/\s+/g, ' ').toLowerCase();
-  const fields = ['number', 'full_name', 'dob', 'gender'];
-  const result = {};
-  let allMatch = true;
-  for (const f of fields) {
-    const match = normalize(input[f]) && normalize(parsed[f]) && normalize(input[f]) === normalize(parsed[f]);
-    result[f] = !!match;
-    if (!match) allMatch = false;
+// Cấu hình multer để lưu file upload
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, '../uploads/cccd');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
   }
-  return { allMatch, details: result };
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Chỉ cho phép upload file ảnh!'), false);
+    }
+  }
+});
+
+// Middleware upload cho CCCD
+const uploadCccd = upload.fields([
+  { name: 'front', maxCount: 1 },
+  { name: 'back', maxCount: 1 }
+]);
+
+// Submit CCCD để xác minh
+const submit = async (req, res) => {
+  try {
+    console.log('🚀 Bắt đầu xử lý CCCD submission');
+    console.log('📋 req.user:', req.user);
+    console.log('📋 User ID:', req.user?.id);
+    console.log('📋 Body:', req.body);
+    console.log('📋 Files:', req.files);
+
+    // Kiểm tra user authentication
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        success: false,
+        message: 'Chưa đăng nhập hoặc token không hợp lệ'
+      });
+    }
+
+    const userId = req.user.id;
+    const { number, full_name, dob, gender, face_cloud_url } = req.body;
+    
+    console.log('🔍 Received face_cloud_url from frontend:', face_cloud_url);
+
+    // Kiểm tra xem client có gửi sẵn dữ liệu OCR không
+    let ocrResult;
+    let useClientOCR = false;
+    const ocrPayloadRawEarly = req.body.ocr_payload;
+    if (ocrPayloadRawEarly) {
+      try {
+        const parsed = typeof ocrPayloadRawEarly === 'string' ? JSON.parse(ocrPayloadRawEarly) : ocrPayloadRawEarly;
+        ocrResult = {
+          number: parsed.number || '',
+          full_name: parsed.full_name || '',
+          dob: parsed.dob || '',
+          gender: parsed.gender || '',
+          nationality: parsed.nationality || 'Việt Nam',
+          place_of_origin: parsed.place_of_origin || '',
+          place_of_residence: parsed.place_of_residence || '',
+          issued_date: parsed.issued_date || '',
+          expiry_date: parsed.expiry_date || '',
+          ocr_text_front: parsed.ocr_text_front || parsed.raw_ocr_text || '',
+          ocr_text_back: parsed.ocr_text_back || '',
+          accuracy: parsed.accuracy || 0.0,
+          source: 'client_ocr'
+        };
+        useClientOCR = true;
+        console.log('🧾 Using client-provided OCR payload (early parse)');
+      } catch (e) {
+        console.warn('⚠️ Invalid ocr_payload JSON at early parse:', e.message);
+      }
+    }
+
+    // Kiểm tra file upload (chỉ bắt buộc nếu KHÔNG có ocr_payload)
+    if (!useClientOCR) {
+      if (!req.files || !req.files.front) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vui lòng upload ảnh mặt trước CCCD'
+        });
+      }
+    }
+
+    const frontFile = req.files && req.files.front ? req.files.front[0] : null;
+    const backFile = req.files && req.files.back ? req.files.back[0] : null;
+
+    console.log('📸 Front file:', frontFile ? frontFile.filename : 'None');
+    console.log('📸 Back file:', backFile ? backFile.filename : 'None');
+
+    // Tùy chọn: dùng dữ liệu OCR do client gửi sẵn để SO SÁNH, bỏ qua gọi Python OCR
+    // Frontend (/cccd) sẽ gửi field 'ocr_payload' (JSON string) chứa dữ liệu đã trích xuất
+    // Nếu chưa có (do parse early fail) thử parse lần nữa
+    if (!ocrResult) {
+      const ocrPayloadRaw = req.body.ocr_payload;
+      if (ocrPayloadRaw) {
+        try {
+          const parsed = typeof ocrPayloadRaw === 'string' ? JSON.parse(ocrPayloadRaw) : ocrPayloadRaw;
+          ocrResult = {
+            number: parsed.number || '',
+            full_name: parsed.full_name || '',
+            dob: parsed.dob || '',
+            gender: parsed.gender || '',
+            nationality: parsed.nationality || 'Việt Nam',
+            place_of_origin: parsed.place_of_origin || '',
+            place_of_residence: parsed.place_of_residence || '',
+            issued_date: parsed.issued_date || '',
+            expiry_date: parsed.expiry_date || '',
+            ocr_text_front: parsed.ocr_text_front || parsed.raw_ocr_text || '',
+            ocr_text_back: parsed.ocr_text_back || '',
+            accuracy: parsed.accuracy || 0.0,
+            source: 'client_ocr'
+          };
+          useClientOCR = true;
+          console.log('🧾 Using client-provided OCR payload');
+        } catch (e) {
+          console.warn('⚠️ Invalid ocr_payload JSON. Fallback to server OCR. Error:', e.message);
+        }
+      }
+    }
+
+    // Nếu không có ocr_payload hợp lệ, gọi Python OCR như bình thường
+    if (!ocrResult) {
+      console.log('🤖 Gọi Python OCR...');
+      console.log('📸 Front file path:', frontFile ? frontFile.path : 'None');
+      console.log('📸 Back file path:', backFile ? backFile.path : 'None');
+
+      try {
+        const ocrService = new pythonOCR.PythonOCRService();
+        const fieldRes = await ocrService.extractFields(frontFile ? frontFile.path : null, backFile ? backFile.path : null);
+        console.log('🤖 Python OCR extractFields response:', JSON.stringify(fieldRes, null, 2));
+
+        if (!fieldRes.success) {
+          return res.status(422).json({
+            success: false,
+            message: fieldRes.error || 'OCR không trích xuất được dữ liệu từ ảnh. Vui lòng chụp rõ hơn cả 2 mặt CCCD và thử lại.'
+          });
+        }
+
+        ocrResult = {
+          number: fieldRes.extracted.number || '',
+          full_name: fieldRes.extracted.full_name || '',
+          dob: fieldRes.extracted.dob || '',
+          gender: fieldRes.extracted.gender || '',
+          nationality: fieldRes.extracted.nationality || 'Việt Nam',
+          place_of_origin: fieldRes.extracted.place_of_origin || '',
+          place_of_residence: fieldRes.extracted.place_of_residence || '',
+          issued_date: fieldRes.extracted.issued_date || '',
+          expiry_date: fieldRes.extracted.expiry_date || '',
+          ocr_text_front: (fieldRes.rawData && fieldRes.rawData.raw_ocr_text) || '',
+          ocr_text_back: '',
+          accuracy: 0.0,
+          source: fieldRes.source || 'python_ocr',
+          face_image_path: fieldRes.face_image_path || '/static/results/0.jpg' // Luôn set face_image_path
+        };
+
+        if (!ocrResult.number && !ocrResult.full_name && !ocrResult.dob && !ocrResult.gender) {
+          return res.status(422).json({
+            success: false,
+            message: 'OCR không trích xuất được dữ liệu từ ảnh. Vui lòng chụp rõ hơn cả 2 mặt CCCD và thử lại.'
+          });
+        }
+      } catch (error) {
+        console.error('❌ Python OCR failed:', error.message);
+        return res.status(502).json({
+          success: false,
+          message: 'Dịch vụ OCR tạm thời không khả dụng. Vui lòng thử lại sau.',
+          error: error.message
+        });
+      }
+    }
+
+    // Dữ liệu từ OCR (chỉ để so sánh, KHÔNG ghi đè user input)
+    const ocrData = {
+      cccd_number: ocrResult.number || '',
+      full_name: ocrResult.full_name || '',
+      date_of_birth: ocrResult.dob || '',
+      gender: ocrResult.gender || '',
+      nationality: ocrResult.nationality || 'Việt Nam',
+      place_of_origin: ocrResult.place_of_origin || '',
+      place_of_residence: ocrResult.place_of_residence || '',
+      issued_date: ocrResult.issued_date || '',
+      expiry_date: ocrResult.expiry_date || '',
+      ocr_text_front: ocrResult.ocr_text_front || '',
+      ocr_text_back: ocrResult.ocr_text_back || '',
+      ocr_accuracy: ocrResult.accuracy || 0.0
+    };
+
+    // Dữ liệu user nhập (ưu tiên, lưu vào database)
+    const userInputData = {
+      cccd_number: number,
+      full_name: full_name,
+      date_of_birth: dob,
+      gender: gender,
+      nationality: 'Việt Nam',
+      place_of_origin: '',
+      place_of_residence: '',
+      issued_date: '',
+      expiry_date: '',
+      ocr_text_front: ocrResult.ocr_text_front || '',
+      ocr_text_back: ocrResult.ocr_text_back || '',
+      ocr_accuracy: ocrResult.accuracy || 0.0
+    };
+
+    console.log('📊 OCR data (từ ảnh):', ocrData);
+    console.log('📊 User input data (user nhập):', userInputData);
+    console.log('🖼️ OCR face_image_path:', ocrResult.face_image_path);
+    console.log('🖼️ OCR result object:', JSON.stringify(ocrResult, null, 2));
+    
+        // Upload ảnh từ results lên Cloudinary nếu có
+        let faceCloudUrl = null;
+        console.log('🔍 Checking face_image_path:', ocrResult.face_image_path);
+        console.log('🔍 face_image_path exists:', !!ocrResult.face_image_path);
+        console.log('🔍 face_image_path trim:', ocrResult.face_image_path ? ocrResult.face_image_path.trim() : 'null');
+        
+        if (ocrResult.face_image_path && ocrResult.face_image_path.trim() !== '') {
+          try {
+            console.log('🖼️ Uploading image from results to Cloudinary:', ocrResult.face_image_path);
+            const { cloudinary } = require('../config/cloudinary');
+            
+            // Nếu face_image_path là URL local, cần convert thành file path
+            let faceImagePath = ocrResult.face_image_path;
+            if (faceImagePath.startsWith('/static/')) {
+              // Convert từ URL static thành file path thực tế
+              faceImagePath = faceImagePath.replace('/static/', './cccd-detector/sources/static/');
+            }
+            
+            console.log('🖼️ Image path to upload:', faceImagePath);
+            
+            const faceUploadResult = await cloudinary.uploader.upload(faceImagePath, {
+              folder: `${process.env.CLOUDINARY_FOLDER_BASE || 'homehelper'}/cccd/faces/${userId}`,
+              public_id: `face-${Date.now()}`,
+              resource_type: 'image',
+            });
+            
+            faceCloudUrl = faceUploadResult.secure_url;
+            console.log('✅ Image uploaded to Cloudinary:', faceCloudUrl);
+          } catch (faceUploadError) {
+            console.warn('⚠️ Image upload failed:', faceUploadError.message);
+          }
+        } else {
+          console.log('⚠️ No face image to upload - face_image_path is empty or null');
+          console.log('🔍 ocrResult keys:', Object.keys(ocrResult));
+          console.log('🔍 ocrResult.face_image_path type:', typeof ocrResult.face_image_path);
+          console.log('🔍 ocrResult.face_image_path value:', ocrResult.face_image_path);
+        }
+
+    // So sánh dữ liệu OCR với dữ liệu user nhập
+    const comparisonResult = compareData(ocrData, { number, full_name, dob, gender });
+    console.log('🔍 Comparison result:', comparisonResult);
+
+    // Tự động quyết định dựa trên tỉ lệ khớp
+    const autoStatus = comparisonResult.isMatch ? 'Verified' : 'Rejected';
+
+    // Optional: Upload verified front image to Cloudinary and save URL to user
+    let cloudUrl = null;
+    try {
+      if (autoStatus === 'Verified' && frontFile) {
+        const { cloudinary } = require('../config/cloudinary');
+        const uploadResult = await new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream({
+            folder: `${process.env.CLOUDINARY_FOLDER_BASE || 'homehelper'}/cccd/${userId}`,
+            resource_type: 'image'
+          }, (error, result) => {
+            if (error) return reject(error);
+            resolve(result);
+          });
+          const fs = require('fs');
+          fs.createReadStream(frontFile.path).pipe(uploadStream);
+        });
+        cloudUrl = uploadResult && uploadResult.secure_url;
+      }
+    } catch (e) {
+      console.warn('⚠️ Cloudinary upload failed:', e.message);
+    }
+
+    // Tạo bản ghi CCCD (lưu dữ liệu user nhập, KHÔNG phải OCR)
+    console.log('💾 Creating CCCD record with face_image_path:', face_cloud_url || faceCloudUrl || ocrResult.face_image_path || '');
+    
+    const cccdRecord = await CCCD.create({
+      user_id: userId,
+      ...userInputData,
+      front_image_path: frontFile ? frontFile.filename : '',
+      back_image_path: backFile ? backFile.filename : '',
+      face_image_path: face_cloud_url || faceCloudUrl || ocrResult.face_image_path || '',
+      verification_status: autoStatus,
+      verified_at: autoStatus === 'Verified' ? new Date().toISOString() : null,
+      verified_by: autoStatus === 'Verified' ? userId : null
+    });
+    
+    console.log('✅ CCCD record created:', cccdRecord);
+
+    // Nếu dữ liệu khớp, cập nhật thông tin user
+    if (autoStatus === 'Verified') {
+      console.log('✅ Dữ liệu khớp, cập nhật user...');
+      await User.updateFromCCCD(userId, { ...userInputData, cccd_url: cloudUrl });
+      console.log('✅ User updated successfully');
+    }
+
+    // Lấy thông tin user sau khi cập nhật
+    const updatedUser = await User.findById(userId);
+
+    res.json({
+      success: true,
+      message: autoStatus === 'Verified' 
+        ? 'Xác minh CCCD thành công!' 
+        : 'CCCD không khớp thông tin, đã bị từ chối tự động',
+      data: {
+        user: updatedUser,
+        cccd_record: cccdRecord,
+        comparison: comparisonResult,
+        ocr_data: ocrData,
+        user_input_data: userInputData,
+        cloud_url: cloudUrl || null,
+        face_cloud_url: faceCloudUrl || null
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ CCCD submission error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Lỗi xử lý CCCD',
+      error: error.message
+    });
+  }
+};
+
+// So sánh dữ liệu OCR với dữ liệu user nhập
+function compareData(extracted, userInput) {
+  const comparisons = {
+    number: compareText(extracted.cccd_number, userInput.number),
+    full_name: compareText(extracted.full_name, userInput.full_name),
+    dob: compareDate(extracted.date_of_birth, userInput.dob),
+    gender: compareText(extracted.gender, userInput.gender)
+  };
+
+  const matchCount = Object.values(comparisons).filter(match => match).length;
+  const totalFields = Object.keys(comparisons).length;
+  const matchRate = matchCount / totalFields;
+
+  return {
+    comparisons,
+    matchCount,
+    totalFields,
+    matchRate,
+    isMatch: matchRate >= 0.8 // Khớp ít nhất 80%
+  };
 }
 
-exports.submit = async (req, res, next) => {
-  try {
-    const userId = Number(req.body.user_id);
-    const inputInfo = {
-      number: req.body.number,
-      full_name: req.body.full_name,
-      dob: req.body.dob,
-      gender: req.body.gender,
-    };
+// So sánh text
+function compareText(text1, text2) {
+  if (!text1 || !text2) return false;
+  
+  const normalize = (str) => {
+    return str.toLowerCase()
+      .replace(/[àáạảãâầấậẩẫăằắặẳẵ]/g, 'a')
+      .replace(/[èéẹẻẽêềếệểễ]/g, 'e')
+      .replace(/[ìíịỉĩ]/g, 'i')
+      .replace(/[òóọỏõôồốộổỗơờớợởỡ]/g, 'o')
+      .replace(/[ùúụủũưừứựửữ]/g, 'u')
+      .replace(/[ỳýỵỷỹ]/g, 'y')
+      .replace(/đ/g, 'd')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
 
-    const front = req.files?.front?.[0];
-    const back = req.files?.back?.[0];
-    if (!front || !back) return res.status(400).json({ error: 'Thiếu ảnh CCCD mặt trước/mặt sau' });
+  return normalize(text1) === normalize(text2);
+}
 
-    const uploadsDir = path.join('uploads', 'cccd');
-    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
-    const frontPath = front.path;
-    const backPath = back.path;
-    let facePath = path.join(uploadsDir, `face_${Date.now()}.jpg`);
-
-    try {
-      const extractedPath = await extractFaceFromFront(frontPath, facePath);
-      // Only update facePath if extraction was successful
-      if (extractedPath && extractedPath !== frontPath) {
-        console.log(`Face extracted successfully to: ${facePath}`);
-      } else {
-        console.warn('Face extraction failed, using front image path');
-        facePath = frontPath; // Fallback to front image
-      }
-    } catch (e) {
-      console.error('Face extraction error:', e);
-      facePath = frontPath; // Fallback to front image
-    }
-
-    let textFront = '';
-    let textBack = '';
-    try {
-      if (visionClient) {
-        const [frontText, backTextVision] = await Promise.all([
-          visionText(frontPath),
-          visionText(backPath),
-        ]);
-        const frontParsedVision = parseByLabelsVi(frontText);
-        const backParsedVision = parseVietnamIdCardText(backTextVision);
-        const parsedVision = { ...backParsedVision, ...frontParsedVision };
-        textFront = frontText;
-        textBack = backTextVision;
-        // Use parsedVision directly if has number
-        if (parsedVision.number) {
-          req._parsedVision = parsedVision;
-        }
-      } else {
-        const { front: tFront, back: tBack } = await extractFieldsByTemplate(frontPath, backPath);
-        textFront = Object.values(tFront).join('\n');
-        textBack = JSON.stringify(tBack);
-      }
-    } catch (e) {
-      console.error('OCR run error:', e);
-    }
-
-    // Try Python OCR first, fallback to Tesseract
-    let parsed = {};
-    let ocrSource = 'tesseract';
-    
-    try {
-      console.log('🔄 Attempting Python OCR...');
-      const pythonResult = await extractFieldsByPythonOCR(frontPath, backPath);
-      if (pythonResult.source === 'python_ocr') {
-        parsed = pythonResult.front;
-        ocrSource = 'python_ocr';
-        console.log('✅ Using Python OCR results');
-      } else {
-        throw new Error('Python OCR not available');
-      }
-    } catch (error) {
-      console.log('⚠️ Python OCR failed, using Tesseract:', error.message);
-      // MRZ-first strategy: parse back MRZ reliably, then overlay any front fields we successfully got
-      const { back: mrzOnly } = await extractFieldsByTemplate(frontPath, backPath);
-      parsed = req._parsedVision ? { ...req._parsedVision } : { ...mrzOnly };
-      ocrSource = 'tesseract';
-    }
-
-    // Normalize and sanitize number preference: parsed MRZ -> front -> user input (digits only)
-    const digits = (val) => (val || '').toString().replace(/\D/g, '');
-    const prefer12 = (val) => {
-      const m = digits(val).match(/\d{9,12}/);
-      return m ? m[0] : '';
-    };
-    const bodyNum = prefer12(req.body.number);
-    const parsedNum = prefer12(parsed.number);
-    parsed.number = parsedNum || bodyNum || '';
-    // Overlay from template front if present
-    try {
-      const { front: frontTry } = await extractFieldsByTemplate(frontPath, backPath);
-      Object.entries(frontTry).forEach(([k, v]) => {
-        if (v && String(v).trim()) parsed[k] = v;
-      });
-    } catch (_) {}
-    const finalNumber = parsed.number || inputInfo.number || '';
-    parsed.number = finalNumber;
-
-    const compare = compareFields(inputInfo, parsed);
-
-    const record = await IDCard.create({
-      user_id: userId,
-      ...parsed,
-      features: undefined,
-      front_image_path: frontPath,
-      back_image_path: backPath,
-      face_image_path: facePath,
-      ocr_text_front: textFront,
-      ocr_text_back: textBack,
-      verified: compare.allMatch,
-    });
-
-    await IDCard.updateVerification(userId, compare.allMatch, finalNumber);
-
-    // Tính toán độ chính xác OCR
-    const extractedFields = {
-      number: parsed.number,
-      full_name: parsed.full_name,
-      dob: parsed.dob,
-      gender: parsed.gender,
-      nationality: parsed.nationality,
-      place_of_origin: parsed.place_of_origin,
-      place_of_residence: parsed.place_of_residence,
-      expiry_date: parsed.issued_date || parsed.expiry_date
-    };
-
-    const fieldAccuracy = {};
-    let totalAccuracy = 0;
-    let filledFields = 0;
-
-    Object.entries(extractedFields).forEach(([key, value]) => {
-      const isFilled = value && value.trim().length > 0;
-      fieldAccuracy[key] = {
-        value: value,
-        filled: isFilled,
-        confidence: isFilled ? 'high' : 'low'
-      };
-      
-      if (isFilled) {
-        filledFields++;
-        totalAccuracy += 100;
-      }
-    });
-
-    const overallAccuracy = filledFields > 0 ? Math.round(totalAccuracy / Object.keys(extractedFields).length) : 0;
-
-    res.status(200).json({
-      success: true,
-      message: 'Đã xử lý CCCD thành công',
-      data: {
-        parsed,
-        compare,
-        record: {
-          id: record.id,
-          user_id: record.user_id,
-          verified: record.verified,
-          created_at: record.created_at
-        }
-      },
-      ocrResults: {
-        extractedFields,
-        fieldAccuracy,
-        overallAccuracy,
-        rawText: {
-          frontText: textFront,
-          backText: textBack
-        },
-        processingInfo: {
-          usedVision: !!req._parsedVision,
-          ocrSource: ocrSource,
-          frontTextLength: (textFront || '').length,
-          backTextLength: (textBack || '').length,
-          filledFieldsCount: filledFields,
-          totalFieldsCount: Object.keys(extractedFields).length
-        }
-      },
-      debug: {
-        usedVision: !!req._parsedVision,
-        frontTextLen: (textFront || '').length,
-        backTextLen: (textBack || '').length,
-      }
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-exports.getByUser = async (req, res, next) => {
-  try {
-    const userId = Number(req.params.userId);
-    const record = await IDCard.findByUserId(userId);
-    if (!record) return res.status(404).json({ error: 'Chưa có dữ liệu CCCD' });
-    res.json(record);
-  } catch (err) {
-    next(err);
-  }
-};
-
-// Endpoint để test OCR và xem kết quả chi tiết
-exports.testOCR = async (req, res, next) => {
-  try {
-    const front = req.files?.front?.[0];
-    const back = req.files?.back?.[0];
-    if (!front || !back) return res.status(400).json({ error: 'Thiếu ảnh CCCD mặt trước/mặt sau' });
-
-    const frontPath = front.path;
-    const backPath = back.path;
-
-    console.log('=== TESTING OCR ===');
-    console.log('Front image:', frontPath);
-    console.log('Back image:', backPath);
-
-    // Test Python OCR first
-    let pythonResult = null;
-    let tesseractResult = null;
-    
-    try {
-      console.log('🔄 Testing Python OCR...');
-      pythonResult = await extractFieldsByPythonOCR(frontPath, backPath);
-      console.log('✅ Python OCR test successful');
-    } catch (error) {
-      console.log('❌ Python OCR test failed:', error.message);
-    }
-    
-    // Test OCR với template (Tesseract)
-    try {
-      console.log('🔄 Testing Tesseract OCR...');
-      tesseractResult = await extractFieldsByTemplate(frontPath, backPath);
-      console.log('✅ Tesseract OCR test successful');
-    } catch (error) {
-      console.log('❌ Tesseract OCR test failed:', error.message);
-    }
-    
-    // Test OCR toàn bộ ảnh
-    const fullFrontText = await ocrImageToText(frontPath);
-    const fullBackText = await ocrImageToText(backPath);
-
-    // Test từng ROI riêng lẻ
-    const roiResults = {};
-    const FRONT_TEMPLATE_V1 = [
-      { key: 'number', left: 0.45, top: 0.25, width: 0.50, height: 0.08 },
-      { key: 'full_name', left: 0.45, top: 0.35, width: 0.52, height: 0.08 },
-      { key: 'dob', left: 0.45, top: 0.43, width: 0.25, height: 0.06 },
-      { key: 'gender', left: 0.70, top: 0.43, width: 0.15, height: 0.06 },
-      { key: 'nationality', left: 0.45, top: 0.50, width: 0.25, height: 0.06 },
-      { key: 'place_of_origin', left: 0.45, top: 0.57, width: 0.52, height: 0.08 },
-      { key: 'place_of_residence', left: 0.45, top: 0.65, width: 0.52, height: 0.10 },
-      { key: 'expiry_date', left: 0.45, top: 0.75, width: 0.25, height: 0.06 },
+// So sánh ngày tháng
+function compareDate(date1, date2) {
+  if (!date1 || !date2) return false;
+  
+  const normalizeDate = (dateStr) => {
+    // Chuyển đổi các format ngày khác nhau về cùng format
+    const formats = [
+      /(\d{1,2})\/(\d{1,2})\/(\d{4})/,  // dd/mm/yyyy
+      /(\d{4})-(\d{1,2})-(\d{1,2})/,   // yyyy-mm-dd
+      /(\d{1,2})-(\d{1,2})-(\d{4})/    // dd-mm-yyyy
     ];
-
-    // Import ocrByRegions function
-    const { ocrByRegions } = require('../utils/ocr');
     
-    try {
-      const roiTexts = await ocrByRegions(frontPath, FRONT_TEMPLATE_V1);
-      roiResults.roiExtraction = roiTexts;
-    } catch (e) {
-      console.error('ROI extraction failed:', e);
-      roiResults.error = e.message;
-    }
-
-    res.status(200).json({
-      message: 'Kết quả test OCR',
-      results: {
-        pythonOCR: pythonResult,
-        tesseractOCR: tesseractResult,
-        templateExtraction: {
-          front: tesseractResult?.front || {},
-          back: tesseractResult?.back || {}
-        },
-        fullImageOCR: {
-          frontText: fullFrontText,
-          backText: fullBackText
-        },
-        roiExtraction: roiResults,
-        imagePaths: {
-          front: frontPath,
-          back: backPath
-        }
+    for (const format of formats) {
+      const match = dateStr.match(format);
+      if (match) {
+        const [, day, month, year] = match;
+        return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
       }
-    });
+    }
+    
+    return dateStr;
+  };
 
-  } catch (err) {
-    console.error('OCR Test Error:', err);
-    res.status(500).json({ 
-      error: 'Lỗi khi test OCR', 
-      details: err.message,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  return normalizeDate(date1) === normalizeDate(date2);
+}
+
+// Lấy danh sách CCCD của user
+const getUserCccd = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const cccdRecords = await CCCD.findByUserId(userId);
+    
+    res.json({
+      success: true,
+      data: cccdRecords
+    });
+  } catch (error) {
+    console.error('❌ Get user CCCD error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
 
+// Lấy thông tin CCCD mới nhất của user
+const getLatestCccd = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const latestCccd = await CCCD.findLatestByUserId(userId);
+    
+    res.json({
+      success: true,
+      data: latestCccd
+    });
+    } catch (error) {
+    console.error('❌ Get latest CCCD error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
 
+// Cập nhật trạng thái xác minh CCCD (cho admin)
+const updateVerificationStatus = async (req, res) => {
+  try {
+    const { cccdId } = req.params;
+    const { status } = req.body;
+    const adminId = req.user.id;
+
+    const updatedCccd = await CCCD.updateVerificationStatus(cccdId, status, adminId);
+    
+    // Nếu xác minh thành công, cập nhật user
+    if (status === 'Verified') {
+      await User.updateFromCCCD(updatedCccd.user_id, updatedCccd);
+    }
+
+    res.json({
+      success: true,
+      message: 'Cập nhật trạng thái thành công',
+      data: updatedCccd
+    });
+  } catch (error) {
+    console.error('❌ Update verification status error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Kiểm tra trạng thái CCCD của user
+const getCCCDStatus = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const status = await CCCD.getCCCDStatus(userId);
+    
+    res.json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    console.error('❌ Get CCCD status error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Kiểm tra user đã có CCCD được duyệt chưa
+const checkVerifiedCCCD = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const verifiedCCCD = await CCCD.hasVerifiedCCCD(userId);
+    
+    res.json({
+      success: true,
+      data: {
+        hasVerified: !!verifiedCCCD,
+        cccd: verifiedCCCD
+      }
+    });
+  } catch (error) {
+    console.error('❌ Check verified CCCD error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// Upload ảnh mặt lên Cloudinary
+const uploadFaceImage = async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const { faceImageUrl } = req.body; // URL của ảnh mặt từ Python OCR
+
+    if (!faceImageUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'Thiếu URL ảnh mặt'
+      });
+    }
+
+    console.log('🖼️ Uploading face image to Cloudinary:', faceImageUrl);
+
+    // Download ảnh từ Python OCR server
+    const axios = require('axios');
+    const response = await axios.get(faceImageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000
+    });
+
+    // Upload lên Cloudinary
+    const { cloudinary } = require('../config/cloudinary');
+    
+    const uploadResult = await cloudinary.uploader.upload(
+      `data:image/jpeg;base64,${Buffer.from(response.data).toString('base64')}`,
+      {
+        folder: `${process.env.CLOUDINARY_FOLDER_BASE || 'homehelper'}/cccd/faces/${userId}`,
+        public_id: `face-${Date.now()}`,
+        resource_type: 'image',
+      }
+    );
+
+    console.log('✅ Face image uploaded to Cloudinary:', uploadResult.secure_url);
+
+    res.json({
+      success: true,
+      message: 'Upload ảnh mặt thành công',
+      data: {
+        face_cloud_url: uploadResult.secure_url
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Upload face image failed:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Upload ảnh mặt thất bại',
+      error: error.message
+    });
+  }
+};
+
+module.exports = {
+  submit,
+  getUserCccd,
+  getLatestCccd,
+  updateVerificationStatus,
+  getCCCDStatus,
+  checkVerifiedCCCD,
+  uploadCccd,
+  uploadFaceImage
+};

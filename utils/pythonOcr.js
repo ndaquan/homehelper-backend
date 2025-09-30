@@ -52,8 +52,9 @@ class PythonOCRService {
         formData.append('back_image', fs.createReadStream(backImagePath));
       }
 
-      // Make request to Python API
-      const response = await axios.post(`${this.pythonApiUrl}/process`, formData, {
+      // Sử dụng API giống web interface gốc: uploader rồi extract
+      // Bước 1: Upload ảnh
+      const uploadResponse = await axios.post(`http://localhost:8080/uploader`, formData, {
         headers: {
           ...formData.getHeaders(),
         },
@@ -62,9 +63,19 @@ class PythonOCRService {
         maxBodyLength: Infinity
       });
 
+      if (!uploadResponse.data || uploadResponse.data.status !== 'success') {
+        throw new Error('Upload failed');
+      }
+
+      // Bước 2: Extract thông tin
+      const response = await axios.post(`http://localhost:8080/extract`, {}, {
+        timeout: this.timeout
+      });
+
       return {
         success: true,
         data: response.data,
+        face_image_path: '/static/results/0.jpg', // Luôn set face_image_path
         source: 'python_ocr'
       };
 
@@ -98,17 +109,20 @@ class PythonOCRService {
 
       // Parse Python OCR response and convert to our format
       const pythonData = result.data;
+      console.log('🐍 Python OCR raw response:', JSON.stringify(pythonData, null, 2));
       
-      // Extract fields from Python response
+      // Extract fields from Python response (giống web interface gốc)
+      const fields = pythonData.data || [];
       const extracted = {
-        number: this.extractField(pythonData, 'number') || '',
-        full_name: this.extractField(pythonData, 'full_name') || '',
-        dob: this.extractField(pythonData, 'dob') || '',
-        gender: this.extractField(pythonData, 'gender') || '',
-        nationality: this.extractField(pythonData, 'nationality') || '',
-        place_of_origin: this.extractField(pythonData, 'place_of_origin') || '',
-        place_of_residence: this.extractField(pythonData, 'place_of_residence') || '',
-        expiry_date: this.extractField(pythonData, 'expiry_date') || ''
+        number: fields[0] || '',
+        full_name: fields[1] || '',
+        dob: fields[2] || '',
+        gender: fields[3] || '',
+        nationality: fields[4] || '',
+        place_of_origin: fields[5] || '',
+        place_of_residence: fields[6] || '',
+        expiry_date: fields[7] || '',
+        face_image_path: '/static/results/0.jpg' // Sử dụng ảnh từ results như web interface gốc
       };
 
       return {
@@ -200,4 +214,11 @@ class PythonOCRService {
   }
 }
 
-module.exports = PythonOCRService;
+// Tạo instance và export các method
+const pythonOCRService = new PythonOCRService();
+
+module.exports = {
+  extractCCCD: (frontImagePath, backImagePath) => pythonOCRService.processCCCD(frontImagePath, backImagePath),
+  healthCheck: () => pythonOCRService.healthCheck(),
+  PythonOCRService
+};
