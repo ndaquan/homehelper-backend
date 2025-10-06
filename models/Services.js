@@ -5,10 +5,11 @@ class Services {
   static async getAllServices() {
     try {
       const query = `
-                SELECT 
-                    s.service_id,
-                    s.name,
-                    s.description,
+        SELECT 
+          s.service_id,
+          s.name,
+          s.description,
+          s.requires_certificate,
                     (
                         SELECT JSON_QUERY((
                             SELECT 
@@ -42,10 +43,11 @@ class Services {
   static async getServiceById(serviceId) {
     try {
       const query = `
-                SELECT 
-                    s.service_id,
-                    s.name,
-                    s.description,
+        SELECT 
+          s.service_id,
+          s.name,
+          s.description,
+          s.requires_certificate,
                     (
                         SELECT JSON_QUERY((
                             SELECT 
@@ -78,7 +80,7 @@ class Services {
   //Get services without return variants
   static async findAll() {
     const query = `
-      SELECT service_id, name, description
+  SELECT service_id, name, description, requires_certificate
       FROM Services
       ORDER BY name ASC
     `;
