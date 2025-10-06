@@ -38,6 +38,8 @@ cloudinary.config({
 let avatarUpload = null;
 // 2) Post images upload (dynamic folder per user: <base>/posts/<userId>)
 let postImagesUpload = null;
+// 3) Certificate upload (dynamic folder per user: <base>/certificates/<userId>)
+let certificateUpload = null;
 
 if (CloudinaryStorage) {
   const avatarStorage = new CloudinaryStorage({
@@ -63,6 +65,20 @@ if (CloudinaryStorage) {
     },
   });
   postImagesUpload = multer({ storage: postImagesStorage });
+
+  const certificateStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+      const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+      return {
+        folder: `${CLOUDINARY_FOLDER_BASE}/certificates/${userId}`,
+        // Accept common image formats plus pdf (auto handles)
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+        resource_type: 'auto',
+      };
+    },
+  });
+  certificateUpload = multer({ storage: certificateStorage });
 }
 
 // Fallback: memory storage for manual upload_stream usage in routes (if CloudinaryStorage not installed)
@@ -107,6 +123,7 @@ module.exports = {
   // Prefer these if multer-storage-cloudinary is installed; otherwise use memoryUpload in routes
   avatarUpload,
   postImagesUpload,
+  certificateUpload,
   memoryUpload,
   videoUpload,
   deleteFile,
