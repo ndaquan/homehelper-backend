@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const taskerController = require('../controllers/taskerController');
 const { authenticateToken, requireAuth } = require('../middleware/auth');
-const { certificateUpload, memoryUpload } = require('../config/cloudinary');
+const requireStaff = require('../middleware/requireStaff');
+const { certificateUpload, memoryUpload, videoUpload } = require('../config/cloudinary');
 
 const certUploadMiddleware = certificateUpload || memoryUpload;
 
@@ -14,7 +15,6 @@ router.put('/address/:address_id', authenticateToken, requireAuth, taskerControl
 router.delete('/address/:address_id', authenticateToken, requireAuth, taskerController.deleteAddress);
 router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
-router.get('/:id', taskerController.getById);
 
 // Certifications & Upgrade
 router.get('/certifications/ping', taskerController.pingCertifications);
@@ -23,5 +23,25 @@ router.post('/certifications/upload', authenticateToken, requireAuth, certUpload
 router.post('/certifications/:cert_id/extract-ai', authenticateToken, requireAuth, taskerController.extractAICertification);
 router.post('/certifications', authenticateToken, requireAuth, taskerController.createCertification);
 router.post('/upgrade', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.upgradeToTasker);
+
+// Application video upload (customer preparing upgrade, so only auth required, not tasker)
+router.post('/application/video-upload', authenticateToken, requireAuth, (videoUpload ? videoUpload.single('video') : memoryUpload.single('video')), taskerController.uploadApplicationVideo);
+// Staff application moderation
+router.post('/applications/:id/approve', authenticateToken, requireStaff, taskerController.approveTaskerApplication);
+router.post('/applications/:id/reject', authenticateToken, requireStaff, taskerController.rejectTaskerApplication);
+// Stateless AI re-check certifications in application snapshot
+router.post('/applications/:id/recheck-certifications', authenticateToken, requireStaff, taskerController.recheckApplicationCertifications);
+// Staff endpoints
+router.get('/applications', authenticateToken, requireStaff, taskerController.listTaskerApplications);
+router.get('/applications/:id', authenticateToken, requireStaff, taskerController.getTaskerApplicationDetail);
+
+// Generic tasker by id (must be numeric) placed last
+// router.get('/:id', (req, res, next) => {
+// 	if (!/^\d+$/.test(req.params.id)) {
+// 		return res.status(400).json({ error: 'Tasker ID không hợp lệ' });
+// 	}
+// 	return taskerController.getById(req, res, next);
+// });
+router.get("/:id", taskerController.getById);
 
 module.exports = router;

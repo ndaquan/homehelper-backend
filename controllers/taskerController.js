@@ -6,6 +6,7 @@ const TaskerCertification = require("../models/TaskerCertification");
 const { executeQuery } = require("../config/database");
 const { cloudinary, certificateUpload } = require('../config/cloudinary');
 const { extractCertificateFromUrl } = require('../config/gemini.service');
+const TaskerApplication = require('../models/TaskerApplication');
 
 // Lazy require classifyService when needed to avoid circular or load cost
 function getClassifyService() {
@@ -523,14 +524,16 @@ exports.upgradeToTasker = async (req, res) => {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
     // Support both JSON and multipart form-data
-    let introduce = "";
-    let variant_ids = [];
-    let certifications = [];
+  let introduce = "";
+  let variant_ids = [];
+  let certifications = [];
+  let introduction_video = null; // optional video object
     if (req.is('application/json')) {
-      const { introduce: introIn = "", variant_ids: variantsIn = [], certifications: certsIn = [] } = req.body || {};
+      const { introduce: introIn = "", variant_ids: variantsIn = [], certifications: certsIn = [], introduction_video: introVideoIn = null } = req.body || {};
       introduce = introIn;
       variant_ids = Array.isArray(variantsIn) ? variantsIn : [];
       certifications = Array.isArray(certsIn) ? certsIn : [];
+      introduction_video = introVideoIn && typeof introVideoIn === 'object' ? introVideoIn : null;
     } else {
       // multipart: fields come as strings; variant_ids could be JSON or comma string
       introduce = req.body.introduce || "";
@@ -561,6 +564,9 @@ exports.upgradeToTasker = async (req, res) => {
           cert_file_url: f.path || (f.secure_url) || f.location || '',
         })).filter(c => c.cert_file_url);
         certifications = [...certifications, ...uploaded];
+      }
+      if (req.body.introduction_video) {
+        try { const parsedVideo = JSON.parse(req.body.introduction_video); if (parsedVideo && parsedVideo.video_url) introduction_video = parsedVideo; } catch(_){ /* ignore */ }
       }
     }
 
@@ -593,7 +599,7 @@ exports.upgradeToTasker = async (req, res) => {
       }
     }
 
-    // Kiểm tra user có phải đã là tasker
+    // Kiểm tra user tồn tại và chưa có đơn pending/approved
     const userResult = await executeQuery("SELECT role FROM Users WHERE user_id = @param1", [userId]);
     if (!userResult.recordset.length) {
       return res.status(404).json({ success: false, message: "User không tồn tại" });
@@ -602,119 +608,41 @@ exports.upgradeToTasker = async (req, res) => {
     if (currentRole === 'Tasker') {
       return res.status(400).json({ success: false, message: "Tài khoản đã là Tasker" });
     }
-
-    // Bắt đầu upgrade trong transaction đơn giản (giả lập)
-    // 1. Update role
-    await executeQuery("UPDATE Users SET role = 'Tasker' WHERE user_id = @param1", [userId]);
-    // 2. Insert Taskers row
-    await executeQuery(
-      "INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)",
-      [userId, introduce, certifications.map(c => c.cert_name).join(', ')]
+    // Simple TaskerApplications table check / create record (assuming table exists); if not, attempt create.
+    try {
+      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
+    } catch(tableErr){ console.warn('⚠️ Could not ensure TaskerApplications table:', tableErr.message); }
+    // Prevent duplicate pending
+    const existingApp = await executeQuery("SELECT TOP 1 application_id, status FROM TaskerApplications WHERE user_id = @param1 AND status IN ('Pending','Approved') ORDER BY application_id DESC", [userId]);
+    if (existingApp.recordset.length && existingApp.recordset[0].status === 'Pending') {
+      return res.status(400).json({ success:false, message:'Bạn đã gửi đơn và đang chờ duyệt.' });
+    }
+    // Insert new application (Pending)
+    const appInsert = await executeQuery(
+      "INSERT INTO TaskerApplications (user_id, introduce, variants_json, certifications_json, video_json, status) OUTPUT INSERTED.application_id VALUES (@param1, @param2, @param3, @param4, @param5, 'Pending')",
+      [userId, introduce, JSON.stringify(variant_ids||[]), JSON.stringify(certifications||[]), JSON.stringify(introduction_video||null)]
     );
+    const applicationId = appInsert.recordset?.[0]?.application_id;
 
-    // 3. Gắn service variants
-    if (Array.isArray(variant_ids) && variant_ids.length) {
-      for (const variantId of variant_ids) {
-        await executeQuery(
-          "INSERT INTO TaskerServiceVariants (tasker_service_variant_id, tasker_id, variant_id) VALUES ((SELECT ISNULL(MAX(tasker_service_variant_id),0)+1 FROM TaskerServiceVariants), @param1, @param2)",
-          [userId, variantId]
-        );
-      }
-    }
+    // Persist certificates only AFTER approval in old flow; now we still store ephemeral for future reference if needed.
+    // (Optionally skip creating TaskerCertification records here; leaving code for potential audit but not committing role.)
+    // 4. (Deferred) persist certificates if you want pre-approval storage – currently we skip DB insertion to avoid polluting TaskerCertification for non-approved.
+    const createdCerts = []; // now always empty until approval step implemented
+    const existingCerts = certifications.filter(c => c.cert_id);
 
-    // 4. Persist certificates: all incoming certifications without cert_id are ephemeral -> create now with any parsed AI fields
-    let createdCerts = [];
-    let existingCerts = certifications.filter(c => c.cert_id);
-    if (Array.isArray(certifications) && certifications.length) {
-      const ephemeral = certifications.filter(c => !c.cert_id);
-      for (const cert of ephemeral) {
-        if (!cert.cert_file_url) continue;
-        const initialAI = {};
-        // Backfill parsed_* from base if parsed missing
-        const effParsedCertName = cert.parsed_cert_name || cert.cert_name || null;
-        const effParsedIssuedBy = cert.parsed_issued_by || cert.issued_by || null;
-        const effParsedIssuedDate = cert.parsed_issued_date || cert.issued_date || null;
-        // Derive final base field values (ensure variables exist before use)
-        const finalCertName = cert.cert_name || effParsedCertName || null;
-        const finalIssuedBy = cert.issued_by || effParsedIssuedBy || null;
-        const finalIssuedDate = cert.issued_date || effParsedIssuedDate || null;
-        // Fallback classification if ai_detected_service missing but we have parsed fields
-        if (!cert.ai_detected_service) {
-          try {
-            const classifyService = getClassifyService();
-            if (classifyService) {
-              const svcListRes = await executeQuery('SELECT service_id, name FROM Services');
-              const svcList = svcListRes.recordset || [];
-              const clsText = [effParsedCertName, effParsedIssuedBy, cert.parsed_holder_name, cert.parsed_grade_or_level].filter(Boolean).join(' ');
-              const cls = classifyService({ services: svcList, text: clsText });
-              if (cls && cls.detected) {
-                cert.ai_detected_service = cls.detected.slug;
-                if (!cert.ai_service_score && cls.detected.score !== undefined) cert.ai_service_score = cls.detected.score;
-              }
-            }
-          } catch (clsUpgradeErr) { console.warn('[UPGRADE][CERT] Fallback classify failed', clsUpgradeErr.message); }
-        }
-        if (cert.extracted_payload) initialAI.extracted_payload = cert.extracted_payload;
-        if (cert.ai_model) initialAI.ai_model = cert.ai_model;
-        if (cert.ai_confidence !== undefined) initialAI.ai_confidence = cert.ai_confidence;
-        if (cert.ai_status) initialAI.ai_status = cert.ai_status; else initialAI.ai_status = 'Extracted';
-        if (cert.needs_review !== undefined) initialAI.needs_review = cert.needs_review;
-        if (effParsedCertName) initialAI.parsed_cert_name = effParsedCertName;
-        if (effParsedIssuedBy) initialAI.parsed_issued_by = effParsedIssuedBy;
-        if (effParsedIssuedDate) initialAI.parsed_issued_date = effParsedIssuedDate;
-        if (cert.parsed_holder_name) initialAI.parsed_holder_name = cert.parsed_holder_name;
-        if (cert.parsed_grade_or_level) initialAI.parsed_grade_or_level = cert.parsed_grade_or_level;
-        if (cert.parsed_certificate_code) initialAI.parsed_certificate_code = cert.parsed_certificate_code;
-        if (cert.ai_detected_service) initialAI.ai_detected_service = cert.ai_detected_service;
-        console.log('[UPGRADE][CERT] Raw incoming ephemeral cert', {
-          cert_name: cert.cert_name,
-          cert_file_url: cert.cert_file_url,
-          service_id: cert.service_id,
-          issued_by: cert.issued_by,
-          issued_date: cert.issued_date,
-          parsed_cert_name: cert.parsed_cert_name,
-          parsed_issued_by: cert.parsed_issued_by,
-          parsed_issued_date: cert.parsed_issued_date,
-          parsed_holder_name: cert.parsed_holder_name,
-          parsed_grade_or_level: cert.parsed_grade_or_level,
-          parsed_certificate_code: cert.parsed_certificate_code,
-          ai_detected_service: cert.ai_detected_service,
-          has_extracted_payload: !!cert.extracted_payload,
-          ai_confidence: cert.ai_confidence,
-          ai_status: cert.ai_status,
-          needs_review: cert.needs_review
-        });
-        console.log('[UPGRADE][CERT] Prepared initialAI before create', initialAI);
-        try {
-          const row = await TaskerCertification.create(userId, {
-            cert_name: finalCertName,
-            cert_file_url: cert.cert_file_url,
-            service_id: Number.isInteger(cert.service_id) ? cert.service_id : null,
-            issued_by: finalIssuedBy,
-            issued_date: finalIssuedDate,
-            initialAI
-          });
-          console.log('[UPGRADE][CERT] Created DB row cert_id=', row.cert_id, {
-            parsed_holder_name: row.parsed_holder_name,
-            parsed_grade_or_level: row.parsed_grade_or_level,
-            parsed_certificate_code: row.parsed_certificate_code,
-            ai_detected_service: row.ai_detected_service
-          });
-          createdCerts.push(row);
-        } catch (certErr) {
-          console.error('[UPGRADE][CERT] Failed to persist cert file_url=', cert.cert_file_url, certErr);
-        }
-      }
-    }
+    // Defer video persistence until approval (optionally keep now if business wants early indexing)
 
     res.status(201).json({
       success: true,
-      message: "Nâng cấp thành công. Tài khoản hiện là Tasker",
+      message: "Gửi đơn thành công. Đơn đang ở trạng thái Pending chờ Staff duyệt.",
       data: {
         tasker_id: userId,
         introduce,
         variant_ids,
-    certifications: [...existingCerts, ...createdCerts],
+        certifications: [...existingCerts, ...createdCerts],
+        application_id: applicationId,
+        status: 'Pending',
+        introduction_video: introduction_video || null,
         requires_certificate_services: requiredServices.filter(s => s.requires_certificate).map(s => s.service_id)
       },
     });
@@ -727,6 +655,182 @@ exports.upgradeToTasker = async (req, res) => {
 // Simple ping for certifications route health
 exports.pingCertifications = (req, res) => {
   res.json({ ok: true, route: '/certifications/ping', time: new Date().toISOString() });
+};
+
+// Upload introduction application video (not yet tasker). Does not persist to DB here; returns Cloudinary info for client to include in upgrade payload.
+exports.uploadApplicationVideo = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No video file uploaded' });
+    }
+    const file = req.file;
+    // multer-storage-cloudinary exposes path (secure_url), filename (public_id)
+    const payload = {
+      success: true,
+      data: {
+        video_url: file.path || file.secure_url || file.url,
+        public_id: file.filename || file.public_id,
+        bytes: file.bytes,
+        format: file.format,
+        duration: file.duration,
+        resource_type: file.resource_type || 'video'
+      }
+    };
+    res.json(payload);
+  } catch (err) {
+    console.error('❌ uploadApplicationVideo error:', err);
+    res.status(500).json({ success: false, message: 'Upload video failed', error: err.message });
+  }
+};
+
+// Staff: list tasker applications (default Pending)
+exports.listTaskerApplications = async (req, res) => {
+  try {
+    const status = req.query.status || 'Pending';
+    const apps = await TaskerApplication.findByStatus(status);
+    res.json({ success:true, data: apps });
+  } catch (e) {
+    console.error('listTaskerApplications error', e);
+    res.status(500).json({ success:false, message:'Lỗi lấy danh sách đơn', error: e.message });
+  }
+};
+
+// Staff approve application
+exports.approveTaskerApplication = async (req, res) => {
+  try {
+    const { id } = req.params; const reviewerId = req.user.userId;
+    const app = await TaskerApplication.findById(id);
+    if (!app) return res.status(404).json({ success:false, message:'Không tìm thấy đơn' });
+    // (Removed stray userName declarations introduced by earlier patch; not needed for approve flow.)
+    if (app.status !== 'Pending') return res.status(400).json({ success:false, message:'Đơn không ở trạng thái Pending' });
+    // Create Tasker account if not already
+    // 1. Update user role
+    await executeQuery("UPDATE Users SET role='Tasker' WHERE user_id=@param1", [app.user_id]);
+    // 2. Insert Taskers row if missing
+    const existsTasker = await executeQuery("SELECT tasker_id FROM Taskers WHERE tasker_id=@param1", [app.user_id]);
+    if (!existsTasker.recordset.length) {
+      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
+    }
+    // 3. Variants linking
+    if (Array.isArray(app.variants) && app.variants.length) {
+      for (const variantId of app.variants) {
+        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_service_variant_id, tasker_id, variant_id) VALUES ((SELECT ISNULL(MAX(tasker_service_variant_id),0)+1 FROM TaskerServiceVariants), @param1, @param2)", [app.user_id, variantId]);
+      }
+    }
+    // 4. Persist certificates into TaskerCertifications if any not already persisted (looking for cert_id absence)
+    if (Array.isArray(app.certifications) && app.certifications.length) {
+      const newlyCreatedIds = [];
+      for (const cert of app.certifications) {
+        if (cert.cert_id) continue; // already in DB
+        if (!cert.cert_file_url) continue;
+        const initialAI = {};
+        const effParsedCertName = cert.parsed_cert_name || cert.cert_name || null;
+        const effParsedIssuedBy = cert.parsed_issued_by || cert.issued_by || null;
+        const effParsedIssuedDate = cert.parsed_issued_date || cert.issued_date || null;
+        if (effParsedCertName) initialAI.parsed_cert_name = effParsedCertName;
+        if (effParsedIssuedBy) initialAI.parsed_issued_by = effParsedIssuedBy;
+        if (effParsedIssuedDate) initialAI.parsed_issued_date = effParsedIssuedDate;
+        if (cert.parsed_holder_name) initialAI.parsed_holder_name = cert.parsed_holder_name;
+        if (cert.parsed_grade_or_level) initialAI.parsed_grade_or_level = cert.parsed_grade_or_level;
+        if (cert.parsed_certificate_code) initialAI.parsed_certificate_code = cert.parsed_certificate_code;
+        if (cert.ai_detected_service) initialAI.ai_detected_service = cert.ai_detected_service;
+        if (cert.ai_confidence !== undefined) initialAI.ai_confidence = cert.ai_confidence;
+        if (cert.ai_status) initialAI.ai_status = cert.ai_status; else initialAI.ai_status = 'Snapshot';
+        if (cert.needs_review !== undefined) initialAI.needs_review = cert.needs_review;
+        try {
+          const row = await TaskerCertification.create(app.user_id, {
+            cert_name: cert.cert_name || effParsedCertName,
+            cert_file_url: cert.cert_file_url,
+            service_id: Number.isInteger(cert.service_id) ? cert.service_id : null,
+            issued_by: cert.issued_by || effParsedIssuedBy,
+            issued_date: cert.issued_date || effParsedIssuedDate,
+            initialAI
+          });
+          if (row && row.cert_id) newlyCreatedIds.push(row.cert_id);
+        } catch (ce) { console.warn('Persist cert on approve failed', ce.message); }
+      }
+      // Mark newly created certifications as verified (no AI extraction run here)
+      if (newlyCreatedIds.length) {
+        const placeholders = newlyCreatedIds.map((_,i)=>`@param${i+2}`).join(',');
+        try {
+          await executeQuery(`UPDATE TaskerCertifications SET verified_at = GETDATE(), verified_by = @param1, status = 'Verified', ai_status = 'Verified' WHERE cert_id IN (${placeholders})`, [reviewerId, ...newlyCreatedIds]);
+        } catch (verr) { console.warn('Mark verify failed', verr.message); }
+      }
+    }
+    // 5. Persist video if any
+    if (app.introduction_video && app.introduction_video.video_url) {
+      try {
+        await executeQuery(`INSERT INTO Videos (user_id, title, description, video_url, public_id, likes, uploaded_at, is_deleted) VALUES (@param1,@param2,@param3,@param4,@param5,0,GETDATE(),0)`, [app.user_id, app.introduction_video.title || 'Giới thiệu', app.introduction_video.description || '', app.introduction_video.video_url, app.introduction_video.public_id || null]);
+      } catch (ve) { console.warn('Persist video on approve failed', ve.message); }
+    }
+    // 6. Mark application approved
+    const updated = await TaskerApplication.approve(id, reviewerId);
+    res.json({ success:true, message:'Đã duyệt đơn', data: updated });
+  } catch (e) {
+    console.error('approveTaskerApplication error', e);
+    res.status(500).json({ success:false, message:'Lỗi duyệt đơn', error: e.message });
+  }
+};
+
+// Staff reject application
+exports.rejectTaskerApplication = async (req, res) => {
+  try {
+    const { id } = req.params; const reviewerId = req.user.userId; const { note } = req.body || {};
+    const app = await TaskerApplication.findById(id);
+    if (!app) return res.status(404).json({ success:false, message:'Không tìm thấy đơn' });
+    if (app.status !== 'Pending') return res.status(400).json({ success:false, message:'Đơn không ở trạng thái Pending' });
+    const updated = await TaskerApplication.reject(id, reviewerId, note);
+    res.json({ success:true, message:'Đã từ chối đơn', data: updated });
+  } catch (e) {
+    console.error('rejectTaskerApplication error', e);
+    res.status(500).json({ success:false, message:'Lỗi từ chối đơn', error: e.message });
+  }
+};
+
+// Staff view application detail
+exports.getTaskerApplicationDetail = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const app = await TaskerApplication.findById(id);
+    if (!app) return res.status(404).json({ success:false, message:'Không tìm thấy đơn' });
+    // Fetch user profile basic
+  // Removed avatar_url (column not present in current Users schema). Provide NULL as placeholder to keep response shape stable if frontend expects it later.
+  const userRes = await executeQuery("SELECT user_id, name, email, phone, role, NULL AS avatar_url FROM Users WHERE user_id=@param1", [app.user_id]);
+    const user = userRes.recordset.length ? userRes.recordset[0] : null;
+    // Primary address (nếu có 1 record)
+    const addrRes = await executeQuery("SELECT TOP 1 address, lat, lng FROM Addresses WHERE user_id=@param1", [app.user_id]);
+    const address = addrRes.recordset.length ? addrRes.recordset[0] : null;
+    // Enrich variants -> variant_details + services_summary
+    let variantDetails = [];
+    let servicesSummary = [];
+    if (Array.isArray(app.variants) && app.variants.length) {
+      const variantIds = app.variants.filter(v => Number.isInteger(v));
+      if (variantIds.length) {
+        const placeholders = variantIds.map((_,i)=>`@param${i+1}`).join(',');
+        const sql = `SELECT sv.variant_id, sv.variant_name, sv.service_id, s.name AS service_name
+                     FROM ServiceVariants sv
+                     JOIN Services s ON sv.service_id = s.service_id
+                     WHERE sv.variant_id IN (${placeholders})`;
+        try {
+          const vr = await executeQuery(sql, variantIds);
+          variantDetails = vr.recordset || [];
+          const grouped = new Map();
+          for (const vd of variantDetails) {
+            if (!grouped.has(vd.service_id)) grouped.set(vd.service_id, { service_id: vd.service_id, service_name: vd.service_name, variants: [] });
+            grouped.get(vd.service_id).variants.push({ variant_id: vd.variant_id, variant_name: vd.variant_name });
+          }
+          servicesSummary = Array.from(grouped.values());
+        } catch (enErr) {
+          console.warn('Variant enrichment failed', enErr.message);
+        }
+      }
+    }
+    const enrichedApp = { ...app, variant_details: variantDetails, services_summary: servicesSummary };
+    res.json({ success:true, data: { application: enrichedApp, user, address } });
+  } catch (e) {
+    console.error('getTaskerApplicationDetail error', e);
+    res.status(500).json({ success:false, message:'Lỗi lấy chi tiết đơn', error: e.message });
+  }
 };
 
 // Debug upload without auth (TEMP) – mirrors old route logic
@@ -1055,5 +1159,115 @@ exports.createCertification = async (req, res) => {
     }
   } catch (e) {
     res.status(500).json({ success:false, message:e.message });
+  }
+};
+
+// Staff re-check AI extraction for an application's snapshot certifications (stateless)
+exports.recheckApplicationCertifications = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(200).json({ success:true, skipped:true, message:'Thiếu GEMINI_API_KEY - bỏ qua re-check' });
+    }
+    const app = await TaskerApplication.findById(id);
+    if (!app) return res.status(404).json({ success:false, message:'Không tìm thấy đơn' });
+    // We allow re-check for any status but primary use is Pending
+    const certifications = Array.isArray(app.certifications) ? app.certifications : [];
+    if (!certifications.length) {
+      return res.json({ success:true, data: { application_id: app.application_id, recheck_at: new Date().toISOString(), certifications: [], overall: { total_certifications:0, total_fields:0, matched_fields:0, accuracy: null } } });
+    }
+    const normalize = (s) => (s||'').toString().trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
+    const dateNorm = (d) => {
+      if (!d) return '';
+      try { return new Date(d).toISOString().slice(0,10); } catch { return (d||'').toString().slice(0,10); }
+    };
+    const fields = [
+      { key:'cert_name', snap:['parsed_cert_name','cert_name'] },
+      { key:'issued_by', snap:['parsed_issued_by','issued_by'] },
+      { key:'issued_date', snap:['parsed_issued_date','issued_date'], date:true },
+      { key:'holder_name', snap:['parsed_holder_name'] },
+      { key:'grade_or_level', snap:['parsed_grade_or_level'] },
+      { key:'certificate_code', snap:['parsed_certificate_code'] }
+    ];
+    const results = [];
+    for (let i=0;i<certifications.length;i++) {
+      const c = certifications[i];
+      if (!c.cert_file_url) {
+        results.push({ index:i, cert_file_url: c.cert_file_url || null, error:'Thiếu cert_file_url' });
+        continue;
+      }
+      let parsedNew = {}; let rawText=''; let err=null;
+      try {
+        const { rawText: rt, parsed } = await extractCertificateFromUrl(c.cert_file_url);
+        rawText = rt; parsedNew = parsed || {}; 
+      } catch(e) { err = e; }
+      const fieldDiff = {}; let matched=0; let considered=0; const originalSnapshot = {}; const recheckedVals = {};
+      for (const f of fields) {
+        const orig = f.snap.map(k=> c[k]).find(v=> v !== undefined && v !== null && v !== '');
+        if (orig) { // only consider fields that existed in original snapshot
+          considered++;
+          const newValRaw = (() => {
+            switch(f.key) {
+              case 'cert_name': return parsedNew.cert_name || null; 
+              case 'issued_by': return parsedNew.issued_by || null;
+              case 'issued_date': return parsedNew.issued_date_iso || parsedNew.issued_date || null;
+              case 'holder_name': return parsedNew.holder_name || null;
+              case 'grade_or_level': return parsedNew.level_or_grade || null;
+              case 'certificate_code': return parsedNew.certificate_code || null;
+              default: return null;
+            }
+          })();
+          const origNorm = f.date ? dateNorm(orig) : normalize(orig);
+            const newNorm = f.date ? dateNorm(newValRaw) : normalize(newValRaw);
+          const match = !!newValRaw && origNorm && newNorm && origNorm === newNorm;
+          if (match) matched++;
+          fieldDiff[f.key] = { match, original: orig, rechecked: newValRaw, normalized_original: origNorm, normalized_rechecked: newNorm };
+          originalSnapshot[f.key] = orig;
+          recheckedVals[f.key] = newValRaw;
+        }
+      }
+      const accuracy = considered ? matched/considered : null;
+      // Holder vs user name comparison (new)
+      let holderUserMatch = null; let holderUserOriginal = null; let holderUserRechecked = null;
+      if (userName) {
+        const nUser = normalize(userName);
+        const snapHolder = c.parsed_holder_name || c.holder_name || null;
+        const newHolder = parsedNew.holder_name || null;
+        holderUserOriginal = snapHolder;
+        holderUserRechecked = newHolder;
+        const nSnapHolder = normalize(snapHolder);
+        const nNewHolder = normalize(newHolder);
+        // Prefer rechecked value if available, else snapshot for comparison
+        const candidate = nNewHolder || nSnapHolder;
+        if (candidate) {
+          if (candidate === nUser || candidate.includes(nUser) || nUser.includes(candidate)) holderUserMatch = true; else holderUserMatch = false;
+        }
+      }
+      results.push({
+        index: i,
+        cert_file_url: c.cert_file_url,
+        ai_confidence_new: parsedNew.confidence ?? null,
+        matches: matched,
+        considered,
+        accuracy,
+        field_diff: fieldDiff,
+        original: originalSnapshot,
+        rechecked: recheckedVals,
+        holder_user: userName ? { user_name: userName, snapshot_holder: c.parsed_holder_name || c.holder_name || null, rechecked_holder: parsedNew.holder_name || null, match: holderUserMatch } : null,
+        error: err ? err.message : null
+      });
+    }
+    const overall = results.reduce((acc,r)=>{
+      if (r.considered) { acc.total_fields += r.considered; acc.matched_fields += r.matches; }
+      acc.total_certifications++;
+      return acc;
+    }, { total_certifications:0, total_fields:0, matched_fields:0 });
+    overall.accuracy = overall.total_fields ? (overall.matched_fields / overall.total_fields) : null;
+    const avgAcc = results.filter(r=> r.accuracy !== null).map(r=>r.accuracy);
+    overall.average_cert_accuracy = avgAcc.length ? (avgAcc.reduce((a,b)=>a+b,0)/avgAcc.length) : null;
+    res.json({ success:true, data:{ application_id: app.application_id, recheck_at: new Date().toISOString(), overall, certifications: results } });
+  } catch (e) {
+    console.error('recheckApplicationCertifications error', e);
+    res.status(500).json({ success:false, message:'Lỗi re-check', error:e.message });
   }
 };
