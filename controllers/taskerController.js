@@ -1243,12 +1243,40 @@ exports.recheckApplicationCertifications = async (req, res) => {
     }
     const app = await TaskerApplication.findById(id);
     if (!app) return res.status(404).json({ success:false, message:'Không tìm thấy đơn' });
+    // Ensure we have user name for holder comparison
+    let userName = null;
+    try {
+      if (app.user_id) {
+        const userRows = await executeQuery('SELECT name FROM Users WHERE user_id = @param1', [app.user_id]);
+        if (userRows && userRows.length) userName = userRows[0].name;
+      } else if (app.user && app.user.name) {
+        userName = app.user.name;
+      }
+    } catch(fetchUserErr){ console.warn('recheckApplicationCertifications user name fetch warn', fetchUserErr.message); }
     // We allow re-check for any status but primary use is Pending
     const certifications = Array.isArray(app.certifications) ? app.certifications : [];
     if (!certifications.length) {
       return res.json({ success:true, data: { application_id: app.application_id, recheck_at: new Date().toISOString(), certifications: [], overall: { total_certifications:0, total_fields:0, matched_fields:0, accuracy: null } } });
     }
     const normalize = (s) => (s||'').toString().trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
+    // Map bilingual/synonym forms to canonical tokens
+    const mapCanonical = (val, field) => {
+      const n = normalize(val);
+      if (!n) return n;
+      if (field === 'grade_or_level') {
+        // canonical ordering: xuatsac, gioi, kha, trungbinh, dat
+        if (/xuat sac|distinction|excellent/.test(n)) return 'xuatsac';
+        if (/gioi|very good|good\b/.test(n)) return 'gioi';
+        if (/kha|fair|above average/.test(n)) return 'kha';
+        if (/trung binh|average/.test(n)) return 'trungbinh';
+        if (/dat|pass/.test(n)) return 'dat';
+      }
+      if (field === 'issued_by') {
+        // common normalization for institution variations (example pattern)
+        if (/daikin air conditioning/.test(n)) return 'daikin air conditioning';
+      }
+      return n;
+    };
     const dateNorm = (d) => {
       if (!d) return '';
       try { return new Date(d).toISOString().slice(0,10); } catch { return (d||'').toString().slice(0,10); }
@@ -1289,11 +1317,17 @@ exports.recheckApplicationCertifications = async (req, res) => {
               default: return null;
             }
           })();
-          const origNorm = f.date ? dateNorm(orig) : normalize(orig);
-            const newNorm = f.date ? dateNorm(newValRaw) : normalize(newValRaw);
-          const match = !!newValRaw && origNorm && newNorm && origNorm === newNorm;
+          const origNormBase = f.date ? dateNorm(orig) : normalize(orig);
+          const newNormBase = f.date ? dateNorm(newValRaw) : normalize(newValRaw);
+          const origNorm = mapCanonical(origNormBase, f.key);
+          const newNorm = mapCanonical(newNormBase, f.key);
+          let match = false;
+          if (origNorm && newNorm && origNorm === newNorm) match = true; else {
+            // Extra tolerance: allow one to contain the other for long descriptive cert_name
+            if (f.key==='cert_name' && origNorm && newNorm && (origNorm.includes(newNorm) || newNorm.includes(origNorm))) match = true;
+          }
           if (match) matched++;
-          fieldDiff[f.key] = { match, original: orig, rechecked: newValRaw, normalized_original: origNorm, normalized_rechecked: newNorm };
+          fieldDiff[f.key] = { match, original: orig, rechecked: newValRaw, normalized_original: origNorm, normalized_rechecked: newNorm, base_original: origNormBase, base_rechecked: newNormBase };
           originalSnapshot[f.key] = orig;
           recheckedVals[f.key] = newValRaw;
         }

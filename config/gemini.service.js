@@ -243,24 +243,35 @@ async function extractCertificateFromUrl(certUrl) {
   }
   const buffer = fs.readFileSync(imagePath);
   const b64 = buffer.toString('base64');
-  const prompt = `Bạn là hệ thống trích xuất dữ liệu chứng chỉ (song ngữ Việt/Anh). Hãy phân tích ảnh và TRẢ VỀ DUY NHẤT một JSON theo schema:
+const prompt = `
+Bạn là hệ thống TRÍCH XUẤT THÔNG TIN CHỨNG CHỈ song ngữ (Việt / Anh), có nhiệm vụ nhận diện, hiểu ngữ cảnh và chuẩn hoá dữ liệu chứng chỉ thành JSON chuẩn. 
+Phân tích hình ảnh hoặc văn bản của chứng chỉ và TRẢ VỀ DUY NHẤT MỘT JSON hợp lệ theo schema dưới đây (không thêm bình luận, không giải thích, không kèm markdown):
+
 {
-  "cert_name":"",          // Tiêu đề đầy đủ của chứng chỉ. Nếu tiêu đề chính quá chung chung (ví dụ: "CHỨNG CHỈ", "CHỨNG CHỈ ĐÀO TẠO", "CERTIFICATE") thì PHẢI ghép thêm dấu " – " rồi đến tên chuyên ngành/chương trình đào tạo (tiếng Việt). Nếu có bản tiếng Anh của chuyên ngành (ví dụ Elderly Care) thì thêm vào cuối trong ngoặc đơn. Ví dụ cuối cùng: "Chứng chỉ đào tạo – Chăm sóc người cao tuổi (Elderly Care)"
-  "issued_by":"",
-  "issued_date_raw":"",
-  "issued_date_iso":"",    // YYYY-MM-DD nếu suy ra được
-  "holder_name":"",
-  "level_or_grade":"",     // cấp độ / loại nếu có
-  "certificate_code":"",   // Số hiệu / mã nếu có
-  "graduation_date_raw":"",
-  "language":"vi",
-  "confidence":0.0
+  "cert_name": "",           // Tên chứng chỉ đầy đủ. Nếu tiêu đề quá chung như "CHỨNG CHỈ", "GIẤY CHỨNG NHẬN", "CERTIFICATE", "CERTIFICATION", "CERTIFIED", "AWARD", "DIPLOMA" thì PHẢI nối thêm " – " + tên chuyên ngành/chương trình (tiếng Việt). Nếu có bản tiếng Anh tương ứng thì thêm trong ngoặc, ví dụ: "Chứng chỉ đào tạo – Chăm sóc người cao tuổi (Elderly Care)".
+  "issued_by": "",           // Tên tổ chức hoặc đơn vị cấp chứng chỉ (Trường, Trung tâm, Học viện, Công ty, Tổ chức quốc tế...).
+  "issued_date_raw": "",     // Ngày cấp đúng nguyên bản trên chứng chỉ (ví dụ: "8 tháng 1 năm 2021" hoặc "10 September 2022").
+  "issued_date_iso": "",     // Ngày cấp dạng ISO (YYYY-MM-DD), nếu có thể suy ra.
+  "holder_name": "",         // Họ tên người được cấp (ưu tiên tiếng Việt nếu song ngữ).
+  "level_or_grade": "",      // Xếp loại hoặc cấp độ (ví dụ: Xuất sắc / Giỏi / Khá / Trung bình / Đạt / Pass / Good / Excellent / Distinction / Merit). Nếu song ngữ, ghi "Giỏi (Good)".
+  "certificate_code": "",    // Mã số, số hiệu hoặc mã đăng ký (ví dụ: "22YDD0000"). Nếu văn bản chứa "Reg. No:" hoặc "Số:", chỉ lấy phần mã sau dấu ":".
+  "graduation_date_raw": "", // Ngày hoàn thành khoá học (nếu khác ngày cấp).
+  "course_duration": "",     // Thời lượng khoá học (ví dụ: "75 ngày", "3 tháng", "120 giờ"), nếu có.
+  "location": "",            // Nơi cấp hoặc nơi đào tạo (ví dụ: "Đà Nẵng", "Hưng Yên", "Vietnam").
+  "language": "vi",          // Ngôn ngữ chính của chứng chỉ: "vi", "en", hoặc "bilingual".
+  "confidence": 0.0          // Độ tin cậy (0–1), ước lượng khả năng trích xuất chính xác.
 }
+
 YÊU CẦU:
-- Không giải thích ngoài JSON.
-- Nếu có cả cụm "Chăm sóc người cao tuổi" và "Elderly Care" hãy chuẩn hóa như hướng dẫn ở cert_name.
-- Giữ nguyên chữ thường/hoa hợp lý: chỉ viết hoa chữ cái đầu mỗi từ tiếng Việt trong cert_name (trừ từ nối), không toàn bộ in HOA.
+- Chỉ trả về JSON hợp lệ, không thêm chú thích hoặc văn bản ngoài JSON.
+- Nếu thông tin không có hoặc không chắc chắn, để giá trị "" hoặc null (không xoá field).
+- Luôn cố gắng trích "level_or_grade" nếu có từ tương đương: Distinction, Excellent, Good, Fair, Pass, Xuất sắc, Giỏi, Khá, Trung bình, Đạt, Merit...
+- Chuẩn hoá "cert_name" như hướng dẫn: tiêu đề chính + " – " + chuyên ngành, thêm bản dịch tiếng Anh trong ngoặc nếu có.
+- Giữ nguyên dấu tiếng Việt, viết hoa chữ cái đầu mỗi cụm quan trọng.
+- Không tự suy diễn hoặc bịa thông tin.
+- Nếu chứng chỉ song ngữ, chọn bản tiếng Việt làm chính, bản tiếng Anh ghi trong ngoặc.
 `;
+
   const body = {
     contents: [
       { role: 'user', parts: [ { inline_data: { mime_type: 'image/png', data: b64 } }, { text: prompt } ] }
@@ -290,6 +301,24 @@ YÊU CẦU:
     graduation_date_raw: json.graduation_date_raw || null,
     confidence: typeof json.confidence === 'number' ? json.confidence : null
   };
+
+  // Heuristic fallback: try to extract level/grade if missing
+  try {
+    if (!parsed.level_or_grade && raw) {
+      const lower = raw.toLowerCase();
+      const gradePatterns = [
+        /xu[aá]t\s*s[aắ]c|distinction|excellent/,
+        /giỏi|very\s+good|good\b/,
+        /khá|fair\b|above\s+average/,
+        /trung\s*bình|average/,
+        /đạt|pass(ed)?\b/
+      ];
+      const gradeLabels = ['Xuất sắc','Giỏi','Khá','Trung bình','Đạt'];
+      for (let gi=0; gi<gradePatterns.length; gi++) {
+        if (gradePatterns[gi].test(lower)) { parsed.level_or_grade = gradeLabels[gi]; break; }
+      }
+    }
+  } catch(_) { /* ignore heuristic errors */ }
 
   try {
     const genericPatterns = [
