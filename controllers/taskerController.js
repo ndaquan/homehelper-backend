@@ -557,14 +557,7 @@ exports.upgradeToTasker = async (req, res) => {
             if (Array.isArray(parsed)) certifications = parsed;
         } catch (_) { /* ignore parse error */ }
       }
-      // Merge uploaded files
-      if (req.files && req.files.length) {
-        const uploaded = req.files.map(f => ({
-          cert_name: f.originalname,
-          cert_file_url: f.path || (f.secure_url) || f.location || '',
-        })).filter(c => c.cert_file_url);
-        certifications = [...certifications, ...uploaded];
-      }
+      // Merge uploaded files (deprecated path for direct URLs) removed to avoid storing permanent URLs.
       if (req.body.introduction_video) {
         try { const parsedVideo = JSON.parse(req.body.introduction_video); if (parsedVideo && parsedVideo.video_url) introduction_video = parsedVideo; } catch(_){ /* ignore */ }
       }
@@ -582,10 +575,10 @@ exports.upgradeToTasker = async (req, res) => {
       requiredServices = serviceResult.recordset || [];
       const needingCert = requiredServices.filter(s => s.requires_certificate);
       if (needingCert.length) {
-        // Build map service_id -> hasCert
+        // Build map service_id -> hasCert (accept cert_public_id or legacy cert_file_url)
         const map = new Map();
         for (const cert of certifications) {
-          if (Number.isInteger(cert.service_id) && cert.cert_file_url) {
+          if (Number.isInteger(cert.service_id) && (cert.cert_public_id || cert.cert_file_url)) {
             map.set(cert.service_id, true);
           }
         }
@@ -688,7 +681,16 @@ exports.listTaskerApplications = async (req, res) => {
   try {
     const status = req.query.status || 'Pending';
     const apps = await TaskerApplication.findByStatus(status);
-    res.json({ success:true, data: apps });
+    const shaped = apps.map(a => ({
+      ...a,
+      certifications: Array.isArray(a.certifications) ? a.certifications.map(c => {
+        if (c.delivery_type === 'authenticated' || c.cert_public_id) {
+          return { ...c, cert_file_url: null, needsSigned: true };
+        }
+        return c;
+      }) : a.certifications
+    }));
+    res.json({ success:true, data: shaped });
   } catch (e) {
     console.error('listTaskerApplications error', e);
     res.status(500).json({ success:false, message:'Lỗi lấy danh sách đơn', error: e.message });
@@ -720,9 +722,12 @@ exports.approveTaskerApplication = async (req, res) => {
     // 4. Persist certificates into TaskerCertifications if any not already persisted (looking for cert_id absence)
     if (Array.isArray(app.certifications) && app.certifications.length) {
       const newlyCreatedIds = [];
+      const existingIds = [];
       for (const cert of app.certifications) {
-        if (cert.cert_id) continue; // already in DB
-        if (!cert.cert_file_url) continue;
+        if (cert.cert_id) { existingIds.push(cert.cert_id); continue; } // already in DB
+        // We no longer require storing a permanent cert_file_url for authenticated assets.
+        // Accept record if either cert_file_url exists (legacy) OR cert_public_id exists (new secure flow).
+        if (!cert.cert_file_url && !cert.cert_public_id) continue;
         const initialAI = {};
         const effParsedCertName = cert.parsed_cert_name || cert.cert_name || null;
         const effParsedIssuedBy = cert.parsed_issued_by || cert.issued_by || null;
@@ -740,7 +745,8 @@ exports.approveTaskerApplication = async (req, res) => {
         try {
           const row = await TaskerCertification.create(app.user_id, {
             cert_name: cert.cert_name || effParsedCertName,
-            cert_file_url: cert.cert_file_url,
+            cert_public_id: cert.cert_public_id || null,
+            delivery_type: cert.delivery_type || (cert.cert_public_id ? 'authenticated' : null),
             service_id: Number.isInteger(cert.service_id) ? cert.service_id : null,
             issued_by: cert.issued_by || effParsedIssuedBy,
             issued_date: cert.issued_date || effParsedIssuedDate,
@@ -749,12 +755,16 @@ exports.approveTaskerApplication = async (req, res) => {
           if (row && row.cert_id) newlyCreatedIds.push(row.cert_id);
         } catch (ce) { console.warn('Persist cert on approve failed', ce.message); }
       }
-      // Mark newly created certifications as verified (no AI extraction run here)
-      if (newlyCreatedIds.length) {
-        const placeholders = newlyCreatedIds.map((_,i)=>`@param${i+2}`).join(',');
+      // Mark certifications as approved (both existing and newly created)
+      const toApprove = [...new Set([...
+        newlyCreatedIds,
+        ...existingIds.filter(id => Number.isInteger(id))
+      ])];
+      if (toApprove.length) {
+        const placeholders = toApprove.map((_,i)=>`@param${i+2}`).join(',');
         try {
-          await executeQuery(`UPDATE TaskerCertifications SET verified_at = GETDATE(), verified_by = @param1, status = 'Verified', ai_status = 'Verified' WHERE cert_id IN (${placeholders})`, [reviewerId, ...newlyCreatedIds]);
-        } catch (verr) { console.warn('Mark verify failed', verr.message); }
+          await executeQuery(`UPDATE TaskerCertifications SET verified_at = GETDATE(), verified_by = @param1, status = 'Approved', ai_status = CASE WHEN ai_status IS NULL OR ai_status = 'Snapshot' THEN 'Verified' ELSE ai_status END WHERE cert_id IN (${placeholders})`, [reviewerId, ...toApprove]);
+        } catch (verr) { console.warn('Mark approve failed', verr.message); }
       }
     }
     // 5. Persist video if any
@@ -825,7 +835,14 @@ exports.getTaskerApplicationDetail = async (req, res) => {
         }
       }
     }
-    const enrichedApp = { ...app, variant_details: variantDetails, services_summary: servicesSummary };
+    // Response shaping for certificates: remove direct cert_file_url if authenticated
+    const shapedCerts = Array.isArray(app.certifications) ? app.certifications.map(c => {
+      if (c.delivery_type === 'authenticated' || c.cert_public_id) {
+        return { ...c, cert_file_url: null, needsSigned: true };
+      }
+      return c;
+    }) : app.certifications;
+    const enrichedApp = { ...app, certifications: shapedCerts, variant_details: variantDetails, services_summary: servicesSummary };
     res.json({ success:true, data: { application: enrichedApp, user, address } });
   } catch (e) {
     console.error('getTaskerApplicationDetail error', e);
@@ -866,7 +883,14 @@ exports.uploadCertifications = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Chưa chọn file chứng chỉ' });
     }
     if (storageEnabled) {
-      const result = { success: true, data: { files: req.files.map(f => ({ original: f.originalname, url: f.path })) } };
+      // multer-storage-cloudinary puts the cloudinary result JSON into file.path or file.filename? Actually f.path contains the URL.
+      // We need public_id but multer-storage-cloudinary exposes it as file.filename (public_id) and path (url).
+      const result = { success: true, data: { files: req.files.map(f => ({
+        original: f.originalname,
+        url: f.path,
+        public_id: f.filename, // provided by storage engine
+        delivery_type: 'authenticated'
+      })) } };
       console.log('✅ Upload (storage) done in', Date.now() - req._startAt, 'ms');
       return res.json(result);
     }
@@ -874,13 +898,18 @@ exports.uploadCertifications = async (req, res) => {
     const folderBase = process.env.CLOUDINARY_FOLDER_BASE || 'homehelper';
     const folder = `${folderBase}/certificates/${userId}`;
     const uploads = await Promise.all(req.files.map(file => new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'auto' }, (error, result) => {
+      const stream = cloudinary.uploader.upload_stream({ folder, resource_type: 'auto', type: 'authenticated' }, (error, result) => {
         if (error) return reject(error);
         resolve(result);
       });
       stream.end(file.buffer);
     })));
-    const payload = { success: true, data: { files: uploads.map(u => ({ original: u.original_filename, url: u.secure_url || u.url })) } };
+    const payload = { success: true, data: { files: uploads.map(u => ({
+      original: u.original_filename,
+      url: u.secure_url || u.url,
+      public_id: u.public_id,
+      delivery_type: 'authenticated'
+    })) } };
     console.log('✅ Upload (stream) done in', Date.now() - req._startAt, 'ms');
     res.json(payload);
   } catch (err) {
@@ -899,8 +928,19 @@ exports.extractAICertification = async (req, res) => {
       return res.status(403).json({ success:false, message:'Không có quyền với chứng chỉ này' });
     }
     await TaskerCertification.updateAIExtraction(cert.cert_id, { ai_status: 'Processing' });
-    console.log('🔍 [AI-EXTRACT] Start re-extract cert_id', cert.cert_id, 'url=', cert.cert_file_url);
-    const { rawText, parsed } = await extractCertificateFromUrl(cert.cert_file_url);
+    // Determine the URL to use for AI: prefer signed URL when using authenticated delivery or when direct URL not stored
+    let aiUrl = cert.cert_file_url;
+    if ((!aiUrl || cert.delivery_type === 'authenticated') && cert.cert_public_id) {
+      try {
+        const { generateSignedCertificateUrl } = require('../config/cloudinary');
+        const { url } = generateSignedCertificateUrl(cert.cert_public_id, { resource_type: 'image', ttlSeconds: 600 });
+        aiUrl = url;
+      } catch (signErr) {
+        console.warn('Signed URL for re-extract failed:', signErr.message);
+      }
+    }
+    console.log('🔍 [AI-EXTRACT] Start re-extract cert_id', cert.cert_id, 'url=', aiUrl);
+    const { rawText, parsed } = await extractCertificateFromUrl(aiUrl);
     const updated = await TaskerCertification.updateAIExtraction(cert.cert_id, {
       extracted_payload: rawText,
       ai_model: 'gemini-2.5-flash',
@@ -935,11 +975,105 @@ exports.extractAICertification = async (req, res) => {
   }
 };
 
+// Generate short-lived signed URL for a stored authenticated certificate
+exports.getSignedCertificateUrl = async (req, res) => {
+  try {
+    const { cert_id } = req.params;
+    if (!cert_id) return res.status(400).json({ success:false, message:'Missing cert_id' });
+    const cert = await TaskerCertification.findById(parseInt(cert_id,10));
+    if (!cert) return res.status(404).json({ success:false, message:'Không tìm thấy chứng chỉ' });
+    // Authorization: owner or staff (role check simplified)
+  const isOwner = req.user && (req.user.userId === cert.tasker_id || req.user.user_id === cert.tasker_id);
+  const roleStr = (req.user && (req.user.role || req.user.roleName)) ? String(req.user.role || req.user.roleName) : '';
+  let isStaff = /^(admin|staff)$/i.test(roleStr);
+  if (!isStaff) {
+    try {
+      const auth = req.headers['authorization'] || '';
+      const m = auth.match(/^Bearer\s+(.+)$/i);
+      if (m) {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.decode(m[1]);
+        if (decoded && decoded.role && /^(admin|staff)$/i.test(String(decoded.role))) {
+          isStaff = true;
+        }
+      }
+    } catch(_) {}
+  }
+    if (!isOwner && !isStaff) {
+      return res.status(403).json({ success:false, message:'Không có quyền truy cập chứng chỉ' });
+    }
+    if (!cert.cert_public_id || cert.delivery_type !== 'authenticated') {
+      return res.status(400).json({ success:false, message:'Chứng chỉ không phải loại authenticated hoặc thiếu public_id' });
+    }
+    const { generateSignedCertificateUrl } = require('../config/cloudinary');
+    const { url, expiresAt } = generateSignedCertificateUrl(cert.cert_public_id, { resource_type: 'image', ttlSeconds: 3600 });
+    return res.json({ success:true, data: { url, expiresAt } });
+  } catch (e) {
+    console.error('getSignedCertificateUrl error', e);
+    res.status(500).json({ success:false, message:'Lỗi tạo signed URL', error: e.message });
+  }
+};
+
+// Generate short-lived signed URL by public_id (alternative access path)
+exports.getSignedCertificateUrlByPublicId = async (req, res) => {
+  try {
+    const { public_id } = req.query;
+    if (!public_id) return res.status(400).json({ success:false, message:'Missing public_id' });
+    let cert = await TaskerCertification.findByPublicId(public_id);
+  const requester = req.user || req.authUser || {};
+  const requesterId = requester.user_id || requester.userId || requester.id;
+  const roleStr2 = requester && (requester.role || requester.roleName) ? String(requester.role || requester.roleName) : '';
+  let isStaff = /^(admin|staff)$/i.test(roleStr2);
+  if (!isStaff) {
+    try {
+      const auth = req.headers['authorization'] || '';
+      const m = auth.match(/^Bearer\s+(.+)$/i);
+      if (m) {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.decode(m[1]);
+        if (decoded && decoded.role && /^(admin|staff)$/i.test(String(decoded.role))) {
+          isStaff = true;
+        }
+      }
+    } catch(_) {}
+  }
+
+    if (!cert) {
+      // Ephemeral path: derive owner from public_id (e.g., homehelper/certificates/{userId}/...)
+      const m = String(public_id).match(/certificates\/(\d+)\//);
+      const ownerFromPath = m ? parseInt(m[1], 10) : null;
+      const isOwnerByPath = ownerFromPath && requesterId && Number(ownerFromPath) === Number(requesterId);
+      if (!isStaff && !isOwnerByPath) {
+        return res.status(403).json({ success:false, message:'Không có quyền truy cập chứng chỉ (owner mismatch)' });
+      }
+      const { generateSignedCertificateUrl } = require('../config/cloudinary');
+      const signed = generateSignedCertificateUrl(public_id, { resource_type: 'image', ttlSeconds: 3600 });
+      if (!signed || !signed.url) return res.status(404).json({ success:false, message:'Không tạo được signed URL' });
+      return res.json({ success:true, data: { url: signed.url, expiresAt: signed.expiresAt } });
+    }
+
+    // Found in DB: owner or staff
+    const isOwner = requesterId && cert.tasker_id && Number(requesterId) === Number(cert.tasker_id);
+    if (!isStaff && !isOwner) {
+      return res.status(403).json({ success:false, message:'Không có quyền truy cập chứng chỉ' });
+    }
+    if (!cert.cert_public_id || cert.delivery_type !== 'authenticated') {
+      return res.status(400).json({ success:false, message:'Chứng chỉ không phải loại authenticated hoặc thiếu public_id' });
+    }
+    const { generateSignedCertificateUrl } = require('../config/cloudinary');
+    const { url, expiresAt } = generateSignedCertificateUrl(cert.cert_public_id, { resource_type: 'image', ttlSeconds: 3600 });
+    return res.json({ success:true, data: { url, expiresAt } });
+  } catch (e) {
+    console.error('getSignedCertificateUrlByPublicId error', e);
+    res.status(500).json({ success:false, message:'Lỗi tạo signed URL', error: e.message });
+  }
+};
+
 // Create (ephemeral by default) certification with AI extraction & validations
 exports.createCertification = async (req, res) => {
   try {
-    const { service_id, cert_name, cert_file_url, issued_by, issued_date, persist } = req.body;
-    if (!cert_file_url) return res.status(400).json({ success:false, message:'Thiếu cert_file_url' });
+    const { service_id, cert_name, cert_file_url, cert_public_id, delivery_type, issued_by, issued_date, persist } = req.body;
+  if (!cert_public_id && !cert_file_url) return res.status(400).json({ success:false, message:'Thiếu thông tin nguồn chứng chỉ (cần cert_public_id hoặc cert_file_url)' });
     const shouldPersist = persist === 1 || persist === '1' || persist === true || persist === 'true';
     if (!shouldPersist) {
       try {
@@ -955,10 +1089,19 @@ exports.createCertification = async (req, res) => {
         const { executeQuery } = require('../config/database');
         const normalize = (s)=> (s||'').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
         if (!process.env.GEMINI_API_KEY) {
-          return res.json({ success:true, data: { cert_id: null, cert_name: cert_name || null, cert_file_url, issued_by: issued_by || null, issued_date: issued_date || null, ai_status: 'Skipped', ai_confidence: null, needs_review: 0, _ephemeral: true, duplication_checked: false }, info: 'Ephemeral mode (no persist) - thiếu GEMINI_API_KEY' });
+          return res.json({ success:true, data: { cert_id: null, cert_name: cert_name || null, cert_file_url: null, cert_public_id: cert_public_id || null, delivery_type: delivery_type || (cert_public_id ? 'authenticated' : null), issued_by: issued_by || null, issued_date: issued_date || null, ai_status: 'Skipped', ai_confidence: null, needs_review: 0, _ephemeral: true, duplication_checked: false }, info: 'Ephemeral mode (no persist) - thiếu GEMINI_API_KEY' });
         }
-        console.log('🔍 [AI-CREATE-EPHEMERAL] Start URL', cert_file_url);
-        const { rawText, parsed } = await extractCertificateFromUrl(cert_file_url);
+        // Determine AI source URL: prefer signed URL when authenticated/public_id provided
+        let ephemeralUrl = cert_file_url;
+        if ((!ephemeralUrl || delivery_type === 'authenticated') && cert_public_id) {
+          try {
+            const { generateSignedCertificateUrl } = require('../config/cloudinary');
+            const { url } = generateSignedCertificateUrl(cert_public_id, { resource_type: 'image', ttlSeconds: 300 });
+            ephemeralUrl = url;
+          } catch(signErr){ console.warn('Signed URL (ephemeral) failed', signErr.message); }
+        }
+        console.log('🔍 [AI-CREATE-EPHEMERAL] Start URL', ephemeralUrl);
+        const { rawText, parsed } = await extractCertificateFromUrl(ephemeralUrl);
         console.log('✅ [AI-CREATE-EPHEMERAL] Parsed date', parsed.issued_date_iso);
         // AI Service Classification
         let aiDetectedService = null; let aiServiceMatch = true; let aiServiceScore = null; let aiServiceMismatchBlock = false;
@@ -989,7 +1132,7 @@ exports.createCertification = async (req, res) => {
           return res.status(400).json({ success:false, ai_service_mismatch:true, message:'Chứng chỉ không thuộc nhóm dịch vụ đã chọn', ai_detected_service: aiDetectedService, ai_service_score: aiServiceScore });
         }
         // Duplicate check
-        const existing = await executeQuery(`SELECT cert_id, cert_name, cert_file_url, issued_by, issued_date, parsed_cert_name, parsed_issued_by, parsed_issued_date, parsed_certificate_code, extracted_payload FROM TaskerCertifications WHERE tasker_id = @param1`, [userId]);
+  const existing = await executeQuery(`SELECT cert_id, cert_name, cert_public_id, issued_by, issued_date, parsed_cert_name, parsed_issued_by, parsed_issued_date, parsed_certificate_code, extracted_payload FROM TaskerCertifications WHERE tasker_id = @param1`, [userId]);
         const existingRows = existing.recordset || [];
         let isDuplicate = false; let duplicateCertId = null; let duplicateReason = '';
         const newCode = (parsed.certificate_code || '').trim();
@@ -1005,8 +1148,9 @@ exports.createCertification = async (req, res) => {
           } catch { return null; }
         };
         for (const row of existingRows) {
-          // 1) Same file URL
-          if (row.cert_file_url && row.cert_file_url === cert_file_url) { isDuplicate = true; duplicateCertId = row.cert_id; duplicateReason = 'Trùng file chứng chỉ'; break; }
+          // 1) Same public id (preferred) or same file URL (legacy)
+          if (row.cert_public_id && cert_public_id && row.cert_public_id === cert_public_id) { isDuplicate = true; duplicateCertId = row.cert_id; duplicateReason = 'Trùng file chứng chỉ (public_id)'; break; }
+          if (row.cert_file_url && cert_file_url && row.cert_file_url === cert_file_url) { isDuplicate = true; duplicateCertId = row.cert_id; duplicateReason = 'Trùng file chứng chỉ (URL)'; break; }
           // 2) Certificate code comparison (including fallback JSON parse)
           let rowCode = row.parsed_certificate_code;
           if (!rowCode && row.extracted_payload) {
@@ -1092,7 +1236,9 @@ exports.createCertification = async (req, res) => {
         return res.json({ success:true, data: {
           cert_id: null,
           cert_name: parsed.cert_name || cert_name || null,
-          cert_file_url,
+          cert_file_url: null,
+          cert_public_id: cert_public_id || null,
+          delivery_type: delivery_type || (cert_public_id ? 'authenticated' : null),
           service_id: service_id ? parseInt(service_id,10) : null,
           issued_by: parsed.issued_by || issued_by || null,
           issued_date: parsed.issued_date_iso || issued_date || null,
@@ -1123,19 +1269,28 @@ exports.createCertification = async (req, res) => {
         }, info: 'Ephemeral certificate (not persisted)'});
       } catch (inner) {
         console.error('Ephemeral AI extract failed', inner);
-        return res.json({ success:true, data: { cert_id: null, cert_name: cert_name || null, cert_file_url, issued_by: issued_by || null, issued_date: issued_date || null, ai_status: 'Failed', ai_confidence: null, needs_review: 0, _ephemeral: true }, warning: 'AI extraction failed (ephemeral)', error: inner.message });
+  return res.json({ success:true, data: { cert_id: null, cert_name: cert_name || null, cert_file_url: (delivery_type === 'authenticated' || cert_public_id) ? null : cert_file_url, cert_public_id: cert_public_id || null, delivery_type: delivery_type || (cert_public_id ? 'authenticated' : null), issued_by: issued_by || null, issued_date: issued_date || null, ai_status: 'Failed', ai_confidence: null, needs_review: 0, _ephemeral: true }, warning: 'AI extraction failed (ephemeral)', error: inner.message });
       }
     }
     // Persist path
     const userId = req.user.userId;
-    const base = await TaskerCertification.create(userId, { cert_name: cert_name || null, cert_file_url, service_id: service_id ? parseInt(service_id,10) : null, issued_by: issued_by || null, issued_date: issued_date || null, initialAI: { ai_status: 'Processing' } });
+  const effectiveDelivery = delivery_type || (cert_public_id ? 'authenticated' : null);
+  const base = await TaskerCertification.create(userId, { cert_name: cert_name || null, cert_public_id: cert_public_id || null, delivery_type: effectiveDelivery, service_id: service_id ? parseInt(service_id,10) : null, issued_by: issued_by || null, issued_date: issued_date || null, initialAI: { ai_status: 'Processing' } });
     try {
       if (!process.env.GEMINI_API_KEY) {
         await TaskerCertification.updateAIExtraction(base.cert_id, { ai_status: 'Skipped', extracted_payload: 'No GEMINI_API_KEY provided' });
         return res.json({ success:true, data: { ...base, ai_status: 'Skipped', _persisted: true }, warning: 'Thiếu GEMINI_API_KEY' });
       }
-      console.log('🔍 [AI-CREATE-PERSIST] Start cert_id', base.cert_id, 'url=', base.cert_file_url);
-      const { rawText, parsed } = await extractCertificateFromUrl(base.cert_file_url);
+      let aiSourceUrl = null;
+      if (base.delivery_type === 'authenticated' && base.cert_public_id) {
+        // Generate a temporary signed URL for AI extraction
+        try {
+          const { url } = generateSignedCertificateUrl(base.cert_public_id, { resource_type: 'image', ttlSeconds: 300 });
+          aiSourceUrl = url;
+        } catch(genErr){ console.warn('Failed to generate signed URL for AI extraction', genErr.message); }
+      }
+      console.log('🔍 [AI-CREATE-PERSIST] Start cert_id', base.cert_id, 'url=', aiSourceUrl);
+      const { rawText, parsed } = await extractCertificateFromUrl(aiSourceUrl);
       const updated = await TaskerCertification.updateAIExtraction(base.cert_id, { extracted_payload: rawText, ai_model: 'gemini-2.5-flash', ai_confidence: parsed.confidence, ai_status: 'Extracted', needs_review: parsed.confidence !== null && parsed.confidence < 0.75 ? 1 : 0, parsed_cert_name: parsed.cert_name, parsed_issued_by: parsed.issued_by, parsed_issued_date: parsed.issued_date_iso, parsed_holder_name: parsed.holder_name, parsed_grade_or_level: parsed.level_or_grade, parsed_certificate_code: parsed.certificate_code });
       // Backfill base columns if still null and parsed now available
       try {
@@ -1220,13 +1375,24 @@ exports.recheckApplicationCertifications = async (req, res) => {
     const results = [];
     for (let i=0;i<certifications.length;i++) {
       const c = certifications[i];
-      if (!c.cert_file_url) {
-        results.push({ index:i, cert_file_url: c.cert_file_url || null, error:'Thiếu cert_file_url' });
+      // Determine recheck URL: prefer signed URL for authenticated snapshots
+      let recheckUrl = c.cert_file_url || null;
+      if ((!recheckUrl || c.delivery_type === 'authenticated') && c.cert_public_id) {
+        try {
+          const { generateSignedCertificateUrl } = require('../config/cloudinary');
+          const { url } = generateSignedCertificateUrl(c.cert_public_id, { resource_type: 'image', ttlSeconds: 600 });
+          recheckUrl = url;
+        } catch (signErr) {
+          console.warn('recheck signed-url error', signErr.message);
+        }
+      }
+      if (!recheckUrl) {
+        results.push({ index:i, cert_file_url: c.cert_file_url || null, error:'Thiếu nguồn chứng chỉ để re-check' });
         continue;
       }
       let parsedNew = {}; let rawText=''; let err=null;
       try {
-        const { rawText: rt, parsed } = await extractCertificateFromUrl(c.cert_file_url);
+        const { rawText: rt, parsed } = await extractCertificateFromUrl(recheckUrl);
         rawText = rt; parsedNew = parsed || {}; 
       } catch(e) { err = e; }
       const fieldDiff = {}; let matched=0; let considered=0; const originalSnapshot = {}; const recheckedVals = {};
@@ -1279,7 +1445,7 @@ exports.recheckApplicationCertifications = async (req, res) => {
       }
       results.push({
         index: i,
-        cert_file_url: c.cert_file_url,
+  cert_file_url: c.cert_file_url || null,
         ai_confidence_new: parsedNew.confidence ?? null,
         matches: matched,
         considered,
