@@ -26,6 +26,8 @@ router.get('/certifications/ping', taskerController.pingCertifications);
 router.post('/certifications/_debug_upload_noauth', certUploadMiddleware.array('cert_files', 2), taskerController.debugUploadCertifications);
 router.post('/certifications/upload', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.uploadCertifications);
 router.post('/certifications/:cert_id/extract-ai', authenticateToken, requireAuth, taskerController.extractAICertification);
+router.get('/certifications/:cert_id/signed-url', authenticateToken, requireAuth, taskerController.getSignedCertificateUrl);
+router.get('/certifications/signed-url', authenticateToken, requireAuth, taskerController.getSignedCertificateUrlByPublicId);
 router.post('/certifications', authenticateToken, requireAuth, taskerController.createCertification);
 router.post('/upgrade', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.upgradeToTasker);
 
