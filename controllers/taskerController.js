@@ -605,10 +605,19 @@ exports.upgradeToTasker = async (req, res) => {
     try {
       await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
     } catch(tableErr){ console.warn('⚠️ Could not ensure TaskerApplications table:', tableErr.message); }
-    // Prevent duplicate pending
+    // Prevent duplicate when there's already a Pending or Approved application
     const existingApp = await executeQuery("SELECT TOP 1 application_id, status FROM TaskerApplications WHERE user_id = @param1 AND status IN ('Pending','Approved') ORDER BY application_id DESC", [userId]);
-    if (existingApp.recordset.length && existingApp.recordset[0].status === 'Pending') {
-      return res.status(400).json({ success:false, message:'Bạn đã gửi đơn và đang chờ duyệt.' });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[upgradeToTasker] userId:', userId, 'existingApp:', existingApp.recordset);
+    }
+    if (existingApp.recordset.length) {
+      const st = existingApp.recordset[0].status;
+      if (st === 'Pending') {
+        return res.status(400).json({ success:false, message:'Bạn đã gửi đơn và đang chờ duyệt.' });
+      }
+      if (st === 'Approved') {
+        return res.status(400).json({ success:false, message:'Đơn trước đó đã được duyệt. Tài khoản đã là Tasker hoặc không thể gửi thêm đơn mới.' });
+      }
     }
     // Insert new application (Pending)
     const appInsert = await executeQuery(
@@ -847,6 +856,28 @@ exports.getTaskerApplicationDetail = async (req, res) => {
   } catch (e) {
     console.error('getTaskerApplicationDetail error', e);
     res.status(500).json({ success:false, message:'Lỗi lấy chi tiết đơn', error: e.message });
+  }
+};
+
+// Get my latest application status (for current user)
+exports.getMyTaskerApplicationStatus = async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.user_id;
+    if (!userId) return res.status(401).json({ success:false, message:'Unauthorized' });
+    // Ensure table exists
+    try {
+      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
+    } catch(_) {}
+    const r = await executeQuery("SELECT TOP 1 application_id, status, created_at, reviewed_at, note FROM TaskerApplications WHERE user_id=@param1 ORDER BY application_id DESC", [userId]);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[getMyTaskerApplicationStatus] userId:', userId, 'result:', r.recordset);
+    }
+    if (!r.recordset.length) return res.json({ success:true, data: { hasApplication:false, status:null } });
+    const row = r.recordset[0];
+    return res.json({ success:true, data: { hasApplication:true, application_id: row.application_id, status: row.status, created_at: row.created_at, reviewed_at: row.reviewed_at, note: row.note } });
+  } catch (e) {
+    console.error('getMyTaskerApplicationStatus error', e);
+    res.status(500).json({ success:false, message:'Lỗi lấy trạng thái đơn', error: e.message });
   }
 };
 

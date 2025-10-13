@@ -36,6 +36,8 @@ router.post('/applications/:id/recheck-certifications', authenticateToken, requi
 // Staff endpoints
 router.get('/applications', authenticateToken, requireStaff, taskerController.listTaskerApplications);
 router.get('/applications/:id', authenticateToken, requireStaff, taskerController.getTaskerApplicationDetail);
+// Current user's latest application status
+router.get('/application/my-status', authenticateToken, requireAuth, taskerController.getMyTaskerApplicationStatus);
 
 // Generic tasker by id (must be numeric) placed last
 // router.get('/:id', (req, res, next) => {
