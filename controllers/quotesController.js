@@ -175,3 +175,111 @@ exports.listMyQuotes = async (req, res) => {
     return res.status(500).json({ success:false, message: 'Lỗi server' });
   }
 };
+
+// Get latest pending quote between requester and the peer user
+exports.getLatestPendingQuoteWithPeer = async (req, res) => {
+  try {
+    const requesterId = req.user?.userId || req.user?.user_id;
+    const peerUserId = parseInt(req.params.peerUserId, 10);
+    if (!peerUserId || Number.isNaN(peerUserId)) {
+      return res.status(400).json({ success: false, message: 'peerUserId không hợp lệ' });
+    }
+
+    // Compute tasker ids for requester and peer if applicable
+    const requesterTaskerId = await getTaskerIdByUserId(requesterId);
+    const peerTaskerId = await getTaskerIdByUserId(peerUserId);
+
+    // Find latest pending quote where participants are (requester as customer and peer as tasker) OR vice versa
+    const rows = await executeQuery(`
+      SELECT TOP 1 
+        q.quote_id, q.post_id, q.tasker_id, q.variant_id, q.proposed_price, q.proposal, q.status, q.sent_at,
+        sv.variant_name, sv.price_min, sv.price_max, sv.specific_price, sv.unit,
+        p.user_id AS customer_id
+      FROM Quotes q
+      INNER JOIN Posts p ON q.post_id = p.post_id
+      INNER JOIN ServiceVariants sv ON q.variant_id = sv.variant_id
+      WHERE q.status = N'Chờ xử lý'
+        AND (
+          (q.tasker_id = @param1 AND p.user_id = @param2)
+          OR
+          (q.tasker_id = @param3 AND p.user_id = @param4)
+        )
+      ORDER BY q.sent_at DESC
+    `, [requesterTaskerId || -1, peerUserId, peerTaskerId || -1, requesterId]);
+
+    const data = rows.recordset?.[0] || null;
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('getLatestPendingQuoteWithPeer error', err);
+    return res.status(500).json({ success:false, message: 'Lỗi server' });
+  }
+};
+
+// Get quote details including variant bounds for negotiation UI
+exports.getQuoteDetails = async (req, res) => {
+  try {
+    const { quoteId } = req.params;
+    const rowRes = await executeQuery(`
+      SELECT q.quote_id, q.post_id, q.tasker_id, q.variant_id, q.proposed_price, q.proposal, q.status, q.sent_at,
+             sv.variant_name, sv.price_min, sv.price_max, sv.specific_price, sv.unit,
+             p.user_id AS customer_id
+      FROM Quotes q
+      INNER JOIN ServiceVariants sv ON q.variant_id = sv.variant_id
+      INNER JOIN Posts p ON q.post_id = p.post_id
+      WHERE q.quote_id = @param1
+    `, [quoteId]);
+    const data = rowRes.recordset?.[0] || null;
+    if (!data) return res.status(404).json({ success:false, message: 'Quote không tồn tại' });
+
+    // Authorization: allow participants (post owner or quote tasker) to view
+    const requesterId = req.user?.userId || req.user?.user_id;
+    if (data.customer_id !== requesterId && data.tasker_id !== requesterId) {
+      return res.status(403).json({ success:false, message: 'Không có quyền' });
+    }
+
+    return res.json({ success: true, data });
+  } catch (err) {
+    console.error('getQuoteDetails error', err);
+    return res.status(500).json({ success:false, message: 'Lỗi server' });
+  }
+};
+// Update proposed price during negotiation (either tasker owner of quote or post owner)
+exports.updateQuotePrice = async (req, res) => {
+  try {
+    const requesterId = req.user?.userId || req.user?.user_id;
+    const { quoteId } = req.params;
+    const { proposed_price } = req.body || {};
+    const price = Number(proposed_price);
+    if (!Number.isFinite(price) || price <= 0) return res.status(400).json({ success:false, message: 'Giá không hợp lệ' });
+
+    const quote = await Quote.findQuoteById(quoteId);
+    if (!quote) return res.status(404).json({ success:false, message: 'Quote không tồn tại' });
+
+    // Only allow when quote is pending
+    if (quote.status !== 'Chờ xử lý') return res.status(409).json({ success:false, message: 'Chỉ cập nhật khi đang Chờ xử lý' });
+
+    // Permission: post owner or tasker who owns the quote
+    const isPostOwner = quote.customer_id === requesterId;
+    const isTaskerOwner = !!(await executeQuery(`SELECT 1 as ok FROM Quotes WHERE quote_id = @param1 AND tasker_id = (SELECT tasker_id FROM Taskers WHERE tasker_id = @param2)`, [quoteId, requesterId])).recordset[0];
+    if (!isPostOwner && !isTaskerOwner) return res.status(403).json({ success:false, message: 'Không có quyền cập nhật báo giá này' });
+
+    // Validate against a min–max range derived from variant config
+    const vRes = await executeQuery(`SELECT price_min, price_max, specific_price FROM ServiceVariants WHERE variant_id = @param1`, [quote.variant_id]);
+    const v = vRes.recordset[0];
+    if (!v) return res.status(400).json({ success:false, message: 'Biến thể dịch vụ không hợp lệ' });
+    const min = v.price_min != null ? Number(v.price_min) : (v.specific_price != null ? Number(v.specific_price) : null);
+    const max = v.price_max != null ? Number(v.price_max) : (v.specific_price != null ? Number(v.specific_price) : null);
+    if (min == null || max == null) {
+      return res.status(400).json({ success:false, message: 'Biến thể dịch vụ chưa cấu hình khoảng giá' });
+    }
+    if (price < min || price > max) {
+      return res.status(400).json({ success:false, message: `Giá phải nằm trong khoảng ${min} - ${max}` });
+    }
+
+    await executeQuery(`UPDATE Quotes SET proposed_price = @param1 WHERE quote_id = @param2`, [price, quoteId]);
+    return res.json({ success: true, data: { quote_id: Number(quoteId), proposed_price: price } });
+  } catch (err) {
+    console.error('updateQuotePrice error', err);
+    return res.status(500).json({ success:false, message: 'Lỗi server' });
+  }
+};

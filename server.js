@@ -95,6 +95,7 @@ app.use("/api/blogs", require("./routes/blogs"));
 app.use("/api/uploads", require("./routes/uploads"));
 app.use("/api/quotes", require("./routes/quotes"));
 app.use("/api/videos", require("./routes/videoRoutes"));
+app.use("/api/negotiations", require("./routes/negotiations"));
 // app.use('/api/users', require('./routes/users'));
 // app.use('/api/bookings', require('./routes/bookings'));
 // app.use('/api/posts', require('./routes/posts'));
