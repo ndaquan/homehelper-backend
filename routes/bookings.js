@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticateToken } = require("../middleware/auth");
 const bookingController = require("../controllers/bookingController");
+const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice } = require("../controllers/bookingController");
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
 router.post("/", bookingController.createFromJobDescription);
@@ -16,5 +17,11 @@ router.get("/:taskerId/can-rate", authenticateToken, bookingController.canRateTa
 
 // 5️⃣ Khách hàng xem danh sách Booking của mình
 router.get("/my", authenticateToken, bookingController.listMyBookings);
+
+// GET /api/bookings/:bookingId - chi tiết booking
+router.get('/:bookingId', authenticateToken, getBookingDetails);
+
+// PATCH /api/bookings/:bookingId/final-price
+router.patch('/:bookingId/final-price', authenticateToken, updateFinalPrice);
 
 module.exports = router;
