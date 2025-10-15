@@ -1,8 +1,7 @@
-
 -- Tạo database mới
-CREATE DATABASE HomeHelperDB;
+CREATE DATABASE HomeHelperDB6;
 GO
-USE HomeHelperDB;
+USE HomeHelperDB6;
 GO
 
 -- Xóa các bảng nếu đã tồn tại
@@ -28,8 +27,11 @@ IF OBJECT_ID('Bookings') IS NOT NULL DROP TABLE Bookings;
 IF OBJECT_ID('TaskerServiceVariants') IS NOT NULL DROP TABLE TaskerServiceVariants;
 IF OBJECT_ID('ServiceVariants') IS NOT NULL DROP TABLE ServiceVariants;
 IF OBJECT_ID('Services') IS NOT NULL DROP TABLE Services;
-IF OBJECT_ID('Customers') IS NOT NULL DROP TABLE Customers;
+IF OBJECT_ID('Wishlist') IS NOT NULL DROP TABLE Wishlist;
 IF OBJECT_ID('Taskers') IS NOT NULL DROP TABLE Taskers;
+IF OBJECT_ID('TaskerCertifications') IS NOT NULL DROP TABLE TaskerCertifications;
+IF OBJECT_ID('TaskerApplications') IS NOT NULL DROP TABLE TaskerApplications;
+IF OBJECT_ID('cccd_verification') IS NOT NULL DROP TABLE cccd_verification;
 IF OBJECT_ID('Addresses') IS NOT NULL DROP TABLE Addresses;
 IF OBJECT_ID('Users') IS NOT NULL DROP TABLE Users;
 
@@ -39,7 +41,7 @@ CREATE TABLE Users (
     name NVARCHAR(255) NOT NULL,
     email NVARCHAR(255) NOT NULL UNIQUE,
     password NVARCHAR(255) NOT NULL,
-    role NVARCHAR(20) NOT NULL CHECK (role IN ('Admin', 'Tasker', 'Customer', 'Guest')),
+    role NVARCHAR(20) NOT NULL CHECK (role IN ('Admin', 'Tasker', 'Customer', 'Guest', 'Staff')),
     phone NVARCHAR(20),
     created_at DATETIME2 DEFAULT GETDATE(),
     updated_at DATETIME2 DEFAULT GETDATE(),
@@ -50,6 +52,28 @@ CREATE TABLE Users (
     cccd_verified_by INT,
     CONSTRAINT FK_Users_VerifiedBy FOREIGN KEY (cccd_verified_by) REFERENCES Users(user_id)
 );
+
+-- Bảng lưu hồ sơ đăng ký trở thành Tasker (Pending -> Approved / Rejected)
+CREATE TABLE TaskerApplications (
+    application_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    introduce NVARCHAR(MAX) NULL,
+    variants_json NVARCHAR(MAX) NULL,          -- JSON danh sách variant_id user chọn
+    certifications_json NVARCHAR(MAX) NULL,    -- Snapshot JSON danh sách chứng chỉ gửi kèm (chưa chắc đã persist)
+    video_json NVARCHAR(MAX) NULL,             -- JSON thông tin video giới thiệu (nếu có)
+    status NVARCHAR(20) NOT NULL DEFAULT 'Pending', -- Pending | Approved | Rejected
+    created_at DATETIME DEFAULT GETDATE(),
+    reviewed_at DATETIME NULL,
+    reviewer_id INT NULL,
+    note NVARCHAR(MAX) NULL,                   -- Lý do từ chối hoặc ghi chú duyệt
+    CONSTRAINT FK_TaskerApplications_User FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
+    CONSTRAINT FK_TaskerApplications_Reviewer FOREIGN KEY (reviewer_id) REFERENCES Users(user_id),
+    CONSTRAINT CHK_TaskerApplications_Status CHECK (status IN ('Pending','Approved','Rejected'))
+);
+
+-- Indexes hỗ trợ lọc nhanh theo trạng thái & user
+CREATE INDEX IX_TaskerApplications_Status ON TaskerApplications(status, created_at);
+CREATE INDEX IX_TaskerApplications_User ON TaskerApplications(user_id);
 
 -- Tạo bảng Addresses
 CREATE TABLE Addresses (
@@ -74,8 +98,8 @@ CREATE TABLE Taskers (
     CONSTRAINT CHK_tasker_status CHECK (status IN (N'Hoạt động', N'Không hoạt động', N'Bị chặn'))
 );
 
--- Tạo bảng
-CREATE TABLE Customers (
+-- Tạo bảng Wishlist
+CREATE TABLE Wishlist (
     customer_id INT PRIMARY KEY,
     favorite_taskers NVARCHAR(MAX),
     FOREIGN KEY (customer_id) REFERENCES Users(user_id)
@@ -85,7 +109,8 @@ CREATE TABLE Customers (
 CREATE TABLE Services (
     service_id INT PRIMARY KEY,
     name NVARCHAR(255) NOT NULL,
-    description NVARCHAR(MAX)
+    description NVARCHAR(MAX),
+    requires_certificate BIT NOT NULL DEFAULT 0
 );
 
 -- Tạo bảng ServiceVariants
@@ -97,9 +122,9 @@ CREATE TABLE ServiceVariants (
     price_min DECIMAL(10,2),
     price_max DECIMAL(10,2),
     unit NVARCHAR(50),
-    specific_price DECIMAL(10,2) NULL,
+    specific_price DECIMAL(10,2),
     FOREIGN KEY (service_id) REFERENCES Services(service_id),
-    CONSTRAINT CHK_pricing_type CHECK (pricing_type IN (N'Theo giờ', N'Theo ngày', N'Theo tháng', N'Theo chiếc', N'Theo m²', N'Theo gói'))
+    CONSTRAINT CHK_pricing_type CHECK (pricing_type IN (N'Theo giờ', N'Theo ngày', N'Theo tuần', N'Theo tháng', N'Theo chiếc', N'Theo m²'))
 );
 
 -- Tạo bảng TaskerServiceVariants
@@ -111,6 +136,39 @@ CREATE TABLE TaskerServiceVariants (
     FOREIGN KEY (tasker_id) REFERENCES Taskers(tasker_id),
     FOREIGN KEY (variant_id) REFERENCES ServiceVariants(variant_id),
     CONSTRAINT UQ_tasker_variant UNIQUE (tasker_id, variant_id)
+);
+
+-- Bảng chứng chỉ Tasker
+CREATE TABLE TaskerCertifications (
+    cert_id INT IDENTITY(1,1) PRIMARY KEY,
+    tasker_id INT NOT NULL,
+    cert_name NVARCHAR(255) NOT NULL,
+    cert_public_id NVARCHAR(255) NULL,
+    delivery_type NVARCHAR(32) NULL, -- e.g. 'authenticated', future: 'encrypted'
+    service_id INT NULL,
+    issued_by NVARCHAR(255) NULL,
+    issued_date DATE NULL,
+    status NVARCHAR(20) DEFAULT 'Pending', -- Pending/Approved/Rejected
+    uploaded_at DATETIME DEFAULT GETDATE(),
+    verified_at DATETIME NULL,
+    verified_by INT NULL,
+    -- AI extraction augmentation
+    extracted_payload NVARCHAR(MAX) NULL,
+    ai_model NVARCHAR(50) NULL,
+    ai_confidence DECIMAL(5,2) NULL,
+    ai_status NVARCHAR(20) NULL, -- Processing/Extracted/Failed
+    needs_review BIT DEFAULT 0,
+    parsed_cert_name NVARCHAR(255) NULL,
+    parsed_issued_by NVARCHAR(255) NULL,
+    parsed_issued_date DATE NULL,
+    parsed_holder_name NVARCHAR(255) NULL,
+    parsed_grade_or_level NVARCHAR(100) NULL,
+    parsed_certificate_code NVARCHAR(120) NULL,
+    ai_detected_service NVARCHAR(120) NULL,
+    FOREIGN KEY (tasker_id) REFERENCES Taskers(tasker_id),
+    FOREIGN KEY (service_id) REFERENCES Services(service_id),
+    FOREIGN KEY (verified_by) REFERENCES Users(user_id),
+    CONSTRAINT CHK_tasker_cert_status CHECK (status IN ('Pending','Approved','Rejected'))
 );
 
 -- Tạo bảng Contracts
@@ -127,7 +185,7 @@ CREATE TABLE Contracts (
     status NVARCHAR(20) DEFAULT N'Chờ ký',
     created_at DATETIME2 DEFAULT GETDATE(),
     signed_at DATETIME2,
-    FOREIGN KEY (customer_id) REFERENCES Customers(customer_id),
+    FOREIGN KEY (customer_id) REFERENCES Wishlist(customer_id),
     FOREIGN KEY (tasker_id) REFERENCES Taskers(tasker_id),
     CONSTRAINT CHK_contract_status CHECK (status IN (N'Chờ ký', N'Đã ký', N'Hủy', N'Hết hạn'))
 );
@@ -146,13 +204,13 @@ CREATE TABLE Bookings (
     status NVARCHAR(20) DEFAULT N'Chờ xử lý',
     type NVARCHAR(20) DEFAULT N'Cơ bản',
     shared BIT DEFAULT 0,
-    work_type NVARCHAR(10) NULL, -- 'FULL_TIME' | 'PART_TIME'
-    base_price DECIMAL(10,2) NOT NULL DEFAULT (0),
-    surcharge DECIMAL(10,2) NOT NULL DEFAULT (0),
+    work_type NVARCHAR(10),
+    base_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+    surcharge DECIMAL(10,2) NOT NULL DEFAULT 0,
     final_price AS (base_price + surcharge) PERSISTED,
     points_earned INT,
     contract_id INT,
-    FOREIGN KEY (customer_id) REFERENCES Customers(customer_id),
+    FOREIGN KEY (customer_id) REFERENCES Wishlist(customer_id),
     FOREIGN KEY (tasker_id) REFERENCES Taskers(tasker_id),
     FOREIGN KEY (service_id) REFERENCES Services(service_id),
     FOREIGN KEY (variant_id) REFERENCES ServiceVariants(variant_id),
@@ -160,7 +218,7 @@ CREATE TABLE Bookings (
     CONSTRAINT CHK_booking_type CHECK (type IN (N'Cơ bản', N'SOS'))
 );
 
--- Thêm khóa ngoại sau khi cả hai bảng đã được tạo
+-- Thêm khóa ngoại cho Contracts và Bookings
 ALTER TABLE Contracts
 ADD CONSTRAINT FK_Contracts_Bookings FOREIGN KEY (booking_id) REFERENCES Bookings(booking_id);
 
@@ -218,25 +276,22 @@ CREATE TABLE Ratings (
     FOREIGN KEY (reviewee_id) REFERENCES Users(user_id)
 );
 
+-- Tạo bảng Posts
 CREATE TABLE Posts (
     post_id INT IDENTITY(1,1) PRIMARY KEY,
     user_id INT NOT NULL,
     title NVARCHAR(255) NOT NULL,
     content NVARCHAR(MAX) NOT NULL,
-    related_booking_id INT NULL, -- Đặt dịch vụ được tạo từ bài viết
+    related_booking_id INT,
     post_date DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
     status VARCHAR(50) NOT NULL DEFAULT 'Pending',
-    photo_urls NVARCHAR(MAX) NULL, -- lưu dạng JSON array
+    photo_urls NVARCHAR(MAX),
     likes INT NOT NULL DEFAULT 0,
     comments_count INT NOT NULL DEFAULT 0,
     created_at DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
     updated_at DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
-    CONSTRAINT FK_Posts_Users FOREIGN KEY (user_id)
-        REFERENCES Users(user_id)
-        ON DELETE CASCADE,
-    CONSTRAINT FK_Posts_Bookings FOREIGN KEY (related_booking_id)
-        REFERENCES Bookings(booking_id)
-        ON DELETE SET NULL
+    CONSTRAINT FK_Posts_Users FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
+    CONSTRAINT FK_Posts_Bookings FOREIGN KEY (related_booking_id) REFERENCES Bookings(booking_id) ON DELETE SET NULL
 );
 
 -- Tạo bảng PostLikes
@@ -249,17 +304,30 @@ CREATE TABLE PostLikes (
     FOREIGN KEY (user_id) REFERENCES Users(user_id),
     UNIQUE (post_id, user_id)
 );
-
+-- Tạo bảng Videos
+CREATE TABLE Videos (
+    video_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT,
+    title NVARCHAR(255) NOT NULL,
+    description NVARCHAR(MAX),
+    video_url NVARCHAR(500) NOT NULL,
+    public_id NVARCHAR(255),
+    likes INT DEFAULT 0,
+    uploaded_at DATETIME2 DEFAULT GETDATE(),
+    is_deleted BIT DEFAULT 0,
+    FOREIGN KEY (user_id) REFERENCES Users(user_id)
+);
 -- Tạo bảng Comments
 CREATE TABLE Comments (
-    comment_id INT PRIMARY KEY,
+    comment_id INT IDENTITY(1,1) PRIMARY KEY,
     post_id INT,
-    user_id INT,
+    video_id INT,
+    user_id INT NOT NULL,
     parent_comment_id INT,
     content NVARCHAR(MAX) NOT NULL,
     created_at DATETIME2 DEFAULT GETDATE(),
-    updated_at DATETIME2 DEFAULT GETDATE(),
     FOREIGN KEY (post_id) REFERENCES Posts(post_id),
+    FOREIGN KEY (video_id) REFERENCES Videos(video_id),
     FOREIGN KEY (user_id) REFERENCES Users(user_id),
     FOREIGN KEY (parent_comment_id) REFERENCES Comments(comment_id)
 );
@@ -269,14 +337,13 @@ CREATE TABLE PostServices (
     post_service_id INT PRIMARY KEY,
     post_id INT,
     service_id INT,
-    variant_id INT NULL,
+    variant_id INT,
     desired_price DECIMAL(10,2),
     notes NVARCHAR(MAX),
     FOREIGN KEY (post_id) REFERENCES Posts(post_id),
     FOREIGN KEY (service_id) REFERENCES Services(service_id),
     FOREIGN KEY (variant_id) REFERENCES ServiceVariants(variant_id)
 );
-
 
 -- Tạo bảng Quotes
 CREATE TABLE Quotes (
@@ -360,17 +427,7 @@ CREATE TABLE PointMilestones (
     description NVARCHAR(255)
 );
 
--- Tạo bảng Videos
-CREATE TABLE Videos (
-    video_id INT PRIMARY KEY,
-    user_id INT,
-    title NVARCHAR(255) NOT NULL,
-    description NVARCHAR(MAX),
-    video_url NVARCHAR(255) NOT NULL,
-    likes INT DEFAULT 0,
-    uploaded_at DATETIME2 DEFAULT GETDATE(),
-    FOREIGN KEY (user_id) REFERENCES Users(user_id)
-);
+
 
 -- Tạo bảng Badges
 CREATE TABLE Badges (
@@ -391,25 +448,53 @@ CREATE TABLE UserBadges (
     FOREIGN KEY (badge_id) REFERENCES Badges(badge_id)
 );
 
+-- Tạo bảng cccd_verification
+CREATE TABLE cccd_verification (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    cccd_number NVARCHAR(20),
+    full_name NVARCHAR(255),
+    date_of_birth DATE,
+    gender NVARCHAR(10),
+    nationality NVARCHAR(100),
+    place_of_origin NVARCHAR(500),
+    place_of_residence NVARCHAR(500),
+    issued_date DATE,
+    expiry_date DATE,
+    front_image_path NVARCHAR(500),
+    back_image_path NVARCHAR(500),
+    face_image_path NVARCHAR(500),
+    ocr_text_front NTEXT,
+    ocr_text_back NTEXT,
+    ocr_accuracy DECIMAL(5,2) DEFAULT 0.0,
+    verification_status NVARCHAR(20) DEFAULT 'Pending',
+    verified_at DATETIME,
+    verified_by INT,
+    is_deleted BIT DEFAULT 0,
+    created_at DATETIME DEFAULT GETDATE(),
+    updated_at DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (user_id) REFERENCES Users(user_id),
+    FOREIGN KEY (verified_by) REFERENCES Users(user_id)
+);
+
 -- Tạo bảng Notifications
 CREATE TABLE Notifications (
     notification_id INT IDENTITY(1,1) PRIMARY KEY,
     user_id INT NOT NULL,
     title NVARCHAR(255) NOT NULL,
-    content NVARCHAR(MAX) NULL,
+    content NVARCHAR(MAX),
     type NVARCHAR(50) NOT NULL,
-    data NVARCHAR(MAX) NULL,
+    data NVARCHAR(MAX),
     is_read BIT NOT NULL DEFAULT 0,
-    read_at DATETIME2 NULL,
+    read_at DATETIME2,
     created_at DATETIME2 NOT NULL DEFAULT SYSDATETIME(),
-    expires_at DATETIME2 NULL,
-    CONSTRAINT FK_Notifications_Users FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
+    expires_at DATETIME2,
+    FOREIGN KEY (user_id) REFERENCES Users(user_id) ON DELETE CASCADE,
     CONSTRAINT CHK_notification_type CHECK (type IN (N'Message', N'Booking', N'Payment', N'Review'))
 );
 
 -- Chèn dữ liệu mẫu
--- Users
-DECLARE @UserID_An INT, @UserID_Binh INT, @UserID_Cuong INT, @UserID_Dung INT, @UserID_Nam INT;
+DECLARE @UserID_An INT, @UserID_Hieu INT, @UserID_Cuong INT, @UserID_Dung INT, @UserID_Nam INT;
 
 INSERT INTO Users (name, email, password, role, phone, cccd_url, cccd_status, cccd_uploaded_at, cccd_verified_at, cccd_verified_by, created_at, updated_at)
 VALUES
@@ -418,8 +503,8 @@ SET @UserID_An = SCOPE_IDENTITY();
 
 INSERT INTO Users (name, email, password, role, phone, cccd_url, cccd_status, cccd_uploaded_at, cccd_verified_at, cccd_verified_by, created_at, updated_at)
 VALUES
-(N'Trần Thị Bình', 'binh.tran@email.com', '$2a$12$JkUS4EaDSFbUnUWcLvJNo.hmpmOlPBt6qd24aGhwL3BNTjPszP85e', 'Tasker', '0912345678', 'cccd/tran_thi_binh.jpg', 'Chờ xử lý', '2025-09-03 09:00:00', NULL, NULL, '2025-09-03 09:00:00', '2025-09-03 09:00:00');
-SET @UserID_Binh = SCOPE_IDENTITY();
+(N'NGUYỄN THANH HIẾU', 'binh.tran@email.com', '$2a$12$JkUS4EaDSFbUnUWcLvJNo.hmpmOlPBt6qd24aGhwL3BNTjPszP85e', 'Tasker', '0912345678', 'https://res.cloudinary.com/dgkkdyrug/image/upload/v1759311794/homehelper/cccd/2/wlwntblvpjdsthbk7w2s.jpg', 'Đã xác minh', '2025-09-03 09:00:00', '2025-10-01 16:41:17.6166667', NULL, '2025-09-03 09:00:00', '2025-10-01 16:41:17.6166667');
+SET @UserID_Hieu = SCOPE_IDENTITY();
 
 INSERT INTO Users (name, email, password, role, phone, cccd_url, cccd_status, cccd_uploaded_at, cccd_verified_at, cccd_verified_by, created_at, updated_at)
 VALUES
@@ -436,6 +521,12 @@ VALUES
 (N'Hoàng Văn Nam', 'nam.hoang@email.com', '$2a$12$JkUS4EaDSFbUnUWcLvJNo.hmpmOlPBt6qd24aGhwL3BNTjPszP85e', 'Admin', '0945678901', NULL, NULL, NULL, NULL, NULL, '2025-09-01 08:00:00', '2025-09-01 08:00:00');
 SET @UserID_Nam = SCOPE_IDENTITY();
 
+-- Seed Staff user
+DECLARE @UserID_Staff INT;
+INSERT INTO Users (name, email, password, role, phone, cccd_url, cccd_status, cccd_uploaded_at, cccd_verified_at, cccd_verified_by, created_at, updated_at)
+VALUES (N'Staff Kiểm Duyệt', 'staff.review@email.com', '$2a$12$JkUS4EaDSFbUnUWcLvJNo.hmpmOlPBt6qd24aGhwL3BNTjPszP85e', 'Staff', '0987654321', NULL, NULL, NULL, NULL, NULL, '2025-09-05 08:00:00', '2025-09-05 08:00:00');
+SET @UserID_Staff = SCOPE_IDENTITY();
+
 -- Addresses
 INSERT INTO Addresses (user_id, address, lat, lng, created_at, updated_at)
 VALUES
@@ -444,28 +535,29 @@ VALUES
 (@UserID_Cuong, N'3 Phan Tứ, Phường Ngũ Hành Sơn, Thành Phố Đà Nẵng', 16.045189, 108.241212, '2025-09-09 21:04:20', '2025-09-09 21:04:20');
 
 -- Taskers
-INSERT INTO Taskers (tasker_id, introduce, certifications, status, rating)
+INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating)
 VALUES
 (@UserID_An, N'Nấu ăn gia đình, dọn dẹp', N'Chứng chỉ nấu ăn cơ bản', N'Hoạt động', 4.50),
-(@UserID_Binh, N'Dọn dẹp, chăm sóc trẻ em, chăm sóc người già', N'Chứng chỉ chăm sóc trẻ em và người già', N'Hoạt động', 4.20),
+(@UserID_Hieu, N'Dọn dẹp, chăm sóc trẻ em, chăm sóc người già', N'Chứng chỉ chăm sóc trẻ em và người già', N'Không hoạt động', 4.20),
 (@UserID_Cuong, N'Nấu ăn, chăm sóc trẻ em, vệ sinh điều hòa', N'Chứng chỉ nấu ăn nâng cao và bảo trì điều hòa', N'Hoạt động', 4.80);
 
--- Customers
-INSERT INTO Customers (customer_id, favorite_taskers)
+-- Wishlist
+INSERT INTO Wishlist (customer_id, favorite_taskers)
 VALUES
+(@UserID_Hieu, N'[]'),
 (@UserID_Dung, N'[' + CAST(@UserID_An AS NVARCHAR) + N',' + CAST(@UserID_Cuong AS NVARCHAR) + N']');
 
 -- Services
-INSERT INTO Services (service_id, name, description)
+INSERT INTO Services (service_id, name, description, requires_certificate)
 VALUES
-(1, N'Nấu ăn', N'Dịch vụ nấu ăn gia đình, bao gồm chuẩn bị bữa sáng, trưa, tối'),
-(2, N'Dọn dẹp nhà cửa', N'Dịch vụ dọn dẹp nhà cửa theo giờ, bao gồm lau chùi và giặt giũ'),
-(3, N'Giúp việc định kỳ', N'Dịch vụ giúp việc theo gói tuần hoặc tháng'),
-(4, N'Chăm sóc người già và bệnh nhân', N'Dịch vụ chăm sóc người già hoặc bệnh nhân, theo ngày hoặc tháng'),
-(5, N'Vệ sinh sofa, nệm, thảm, rèm', N'Dịch vụ vệ sinh sofa, nệm, thảm và rèm với giá tùy loại chất liệu'),
-(6, N'Vệ sinh điều hòa', N'Dịch vụ vệ sinh điều hòa, bao gồm dàn nóng, dàn lạnh và kiểm tra gas'),
-(7, N'Tổng vệ sinh', N'Dịch vụ tổng vệ sinh cho doanh nghiệp lớn, tính theo mét vuông'),
-(8, N'Chăm sóc trẻ em', N'Dịch vụ chăm sóc trẻ em, bao gồm hỗ trợ học tập và vui chơi, theo ngày hoặc tháng');
+(1, N'Nấu ăn', N'Dịch vụ nấu ăn gia đình, bao gồm chuẩn bị bữa sáng, trưa, tối', 1),
+(2, N'Dọn dẹp nhà cửa', N'Dịch vụ dọn dẹp nhà cửa theo giờ, bao gồm lau chùi và giặt giũ', 0),
+(3, N'Giúp việc định kỳ', N'Dịch vụ giúp việc theo gói tuần hoặc tháng', 0),
+(4, N'Chăm sóc người già và bệnh nhân', N'Dịch vụ chăm sóc người già hoặc bệnh nhân, theo ngày hoặc tháng', 1),
+(5, N'Vệ sinh sofa, nệm, thảm, rèm', N'Dịch vụ vệ sinh sofa, nệm, thảm và rèm với giá tùy loại chất liệu', 0),
+(6, N'Vệ sinh điều hòa', N'Dịch vụ vệ sinh điều hòa, bao gồm dàn nóng, dàn lạnh và kiểm tra gas', 1),
+(7, N'Tổng vệ sinh', N'Dịch vụ tổng vệ sinh cho doanh nghiệp lớn, tính theo mét vuông', 0),
+(8, N'Chăm sóc trẻ em', N'Dịch vụ chăm sóc trẻ em, bao gồm hỗ trợ học tập và vui chơi, theo ngày hoặc tháng', 1);
 
 -- ServiceVariants
 INSERT INTO ServiceVariants (variant_id, service_id, variant_name, pricing_type, price_min, price_max, unit, specific_price)
@@ -473,11 +565,11 @@ VALUES
 (1, 1, N'Nấu ăn cho 2-3 người, 2-3 món', N'Theo giờ', 140.00, 150.00, N'Giờ', 145.00),
 (2, 1, N'Nấu ăn cho 5-8 người, 2-3 món', N'Theo giờ', 170.00, 180.00, N'Giờ', 175.00),
 (3, 2, N'Dọn dẹp nhà cửa theo giờ', N'Theo giờ', 80.00, 120.00, N'Giờ', 100.00),
-(4, 3, N'Gói giúp việc hàng tuần', N'Theo gói', 400.00, 600.00, N'Gói', 500.00),
-(5, 3, N'Gói giúp việc hàng tháng', N'Theo gói', 1500.00, 2000.00, N'Gói', 1750.00),
+(4, 3, N'Gói giúp việc hàng tuần', N'Theo tuần', 400.00, 600.00, N'Tuần', 500.00),
+(5, 3, N'Gói giúp việc hàng tháng', N'Theo tháng', 1500.00, 2000.00, N'Tháng', 1750.00),
 (6, 4, N'Chăm sóc người già theo ngày', N'Theo ngày', 500.00, 800.00, N'Ngày', 650.00),
-(7, 4, N'Chăm sóc người già theo tháng', N'Theo tháng', 5000.00, 10000.00, N'Tháng', 7500.00),
-(8, 4, N'Chăm sóc người già theo giờ', N'Theo giờ', 120.00, 200.00, N'Giờ', 160.00),
+(7, 4, N'Chăm sóc người già theo tuần', N'Theo tuần', 4000.00, 5000.00, N'Tuần', 4500.00),
+(8, 4, N'Chăm sóc người già theo tháng', N'Theo tháng', 5000.00, 10000.00, N'Tháng', 7500.00),
 (9, 5, N'Vệ sinh sofa (vải nỉ)', N'Theo chiếc', 150.00, 300.00, N'Chiếc', 225.00),
 (10, 5, N'Vệ sinh sofa (da)', N'Theo chiếc', 200.00, 500.00, N'Chiếc', 350.00),
 (11, 5, N'Vệ sinh nệm', N'Theo chiếc', 200.00, 400.00, N'Chiếc', 300.00),
@@ -488,17 +580,17 @@ VALUES
 (16, 6, N'Vệ sinh điều hòa âm trần', N'Theo chiếc', 700.00, 800.00, N'Chiếc', 750.00),
 (17, 7, N'Tổng vệ sinh cho doanh nghiệp', N'Theo m²', 40.00, 60.00, N'Mét vuông', 50.00),
 (18, 8, N'Chăm sóc trẻ em theo ngày', N'Theo ngày', 400.00, 600.00, N'Ngày', 500.00),
-(19, 8, N'Chăm sóc trẻ em theo tháng', N'Theo tháng', 4000.00, 8000.00, N'Tháng', 6000.00),
-(20, 8, N'Chăm sóc trẻ em theo giờ', N'Theo giờ', 100.00, 180.00, N'Giờ', 140.00);
+(19, 8, N'Chăm sóc trẻ em theo tuần', N'Theo tuần', 3000.00, 4000.00, N'Tuần', 3500.00),
+(20, 8, N'Chăm sóc trẻ em theo tháng', N'Theo tháng', 4000.00, 8000.00, N'Tháng', 6000.00);
 
 -- TaskerServiceVariants
 INSERT INTO TaskerServiceVariants (tasker_service_variant_id, tasker_id, variant_id, created_at)
 VALUES
 (1, @UserID_An, 1, '2025-09-01 08:00:00'),
 (2, @UserID_An, 3, '2025-09-01 08:00:00'),
-(3, @UserID_Binh, 3, '2025-09-02 09:00:00'),
-(4, @UserID_Binh, 6, '2025-09-02 09:00:00'),
-(5, @UserID_Binh, 19, '2025-09-02 09:00:00'),
+(3, @UserID_Hieu, 3, '2025-09-02 09:00:00'),
+(4, @UserID_Hieu, 6, '2025-09-02 09:00:00'),
+(5, @UserID_Hieu, 19, '2025-09-02 09:00:00'),
 (6, @UserID_Cuong, 2, '2025-09-03 10:00:00'),
 (7, @UserID_Cuong, 14, '2025-09-03 10:00:00'),
 (8, @UserID_Cuong, 20, '2025-09-03 10:00:00');
@@ -506,13 +598,13 @@ VALUES
 -- Contracts
 INSERT INTO Contracts (contract_id, booking_id, customer_id, tasker_id, terms, customer_signature_url, tasker_signature_url, start_date, end_date, status, created_at, signed_at)
 VALUES
-(1, NULL, @UserID_Dung, @UserID_Binh, N'Hợp đồng chăm sóc người già theo tháng, làm việc 8h/ngày', NULL, NULL, '2025-10-01 00:00:00', '2025-10-31 23:59:59', N'Chờ ký', '2025-09-05 10:00:00', NULL);
+(1, NULL, @UserID_Dung, @UserID_Hieu, N'Hợp đồng chăm sóc người già theo tháng, làm việc 8h/ngày', NULL, NULL, '2025-10-01 00:00:00', '2025-10-31 23:59:59', N'Chờ ký', '2025-09-05 10:00:00', NULL);
 
 -- Bookings
-INSERT INTO Bookings (booking_id, customer_id, tasker_id, service_id, variant_id, booking_time, start_time, end_time, location, status, type, shared, total_price, points_earned, contract_id)
+INSERT INTO Bookings (booking_id, customer_id, tasker_id, service_id, variant_id, booking_time, start_time, end_time, location, status, type, shared, work_type, base_price, surcharge, points_earned, contract_id)
 VALUES
-(1, @UserID_Dung, @UserID_An, 1, 1, '2025-09-05 09:00:00', '2025-09-06 08:00:00', '2025-09-06 10:00:00', N'213 Hoài Thanh, Phường Mỹ An, Quận Ngũ Hành Sơn, Thành Phố Đà Nẵng', N'Chờ xử lý', N'Thông thường', 0, 150.00, 10, NULL),
-(2, @UserID_Dung, @UserID_Binh, 4, 7, '2025-09-05 10:00:00', '2025-10-01 08:00:00', '2025-10-31 17:00:00', N'213 Hoài Thanh, Phường Mỹ An, Quận Ngũ Hành Sơn, Thành Phố Đà Nẵng', N'Chờ xử lý', N'Định kỳ', 0, 6000.00, 50, 1);
+(1, @UserID_Dung, @UserID_An, 1, 1, '2025-09-05 09:00:00', '2025-09-06 08:00:00', '2025-09-06 10:00:00', N'213 Hoài Thanh, Phường Mỹ An, Quận Ngũ Hành Sơn, Thành Phố Đà Nẵng', N'Chờ xử lý', N'Cơ bản', 0, NULL, 150.00, 0.00, 10, NULL),
+(2, @UserID_Dung, @UserID_Hieu, 4, 7, '2025-09-05 10:00:00', '2025-10-01 08:00:00', '2025-10-31 17:00:00', N'213 Hoài Thanh, Phường Mỹ An, Quận Ngũ Hành Sơn, Thành Phố Đà Nẵng', N'Chờ xử lý', N'Cơ bản', 0, NULL, 6000.00, 0.00, 50, 1);
 
 -- Tasks
 INSERT INTO Tasks (task_id, booking_id, description, checklist, completed)
@@ -523,8 +615,8 @@ VALUES
 -- TaskPhotos
 INSERT INTO TaskPhotos (photo_id, task_id, photo_url, photo_type, uploaded_at, uploaded_by)
 VALUES
-(1, 1, 'photos/task1_before.jpg', N'Trước', '2025-09-06 07:30:00', @UserID_An),
-(2, 1, 'photos/task1_after.jpg', N'Sau', '2025-09-06 10:30:00', @UserID_An);
+(1, 1, N'photos/task1_before.jpg', N'Trước', '2025-09-06 07:30:00', @UserID_An),
+(2, 1, N'photos/task1_after.jpg', N'Sau', '2025-09-06 10:30:00', @UserID_An);
 
 -- Payments
 INSERT INTO Payments (payment_id, booking_id, amount, payment_method, payment_date, status)
@@ -537,29 +629,32 @@ VALUES
 (1, 1, @UserID_Dung, @UserID_An, 4, N'Nấu ăn ngon, đúng giờ', '2025-09-06 11:30:00');
 
 -- Posts
-INSERT INTO Posts (user_id, title, content, related_booking_id, status, photo_urls, likes, comments_count)
+INSERT INTO Posts (user_id, title, content, related_booking_id, post_date, status, photo_urls, likes, comments_count, created_at, updated_at)
 VALUES
-(1, N'Looking for a cleaner for the weekend', N'I need someone to clean my house this weekend. 3 bedrooms, 2 bathrooms. Reasonable price please.', NULL, 'Approved', N'["/images/house1.jpg", "/images/house2.jpg"]', 4, 2),
-(2, N'Tutor needed for Math', N'I am looking for an experienced math tutor for high school level. 2 sessions per week.', 1, 'Pending', N'["/images/math.jpg"]', 0, 0),
-(3, N'Gardening service required', N'Looking for someone to take care of my small garden. Tasks include watering plants and trimming bushes.', NULL, 'Rejected', NULL, 1, 0);
+(@UserID_An, N'Looking for a cleaner for the weekend', N'I need someone to clean my house this weekend. 3 bedrooms, 2 bathrooms. Reasonable price please.', NULL, '2025-10-01 16:27:09.1494776', 'Approved', N'["/images/house1.jpg", "/images/house2.jpg"]', 4, 2, '2025-10-01 16:27:09.1494776', '2025-10-01 16:27:09.1494776'),
+(@UserID_Hieu, N'Tutor needed for Math', N'I am looking for an experienced math tutor for high school level. 2 sessions per week.', 1, '2025-10-01 16:27:09.1494776', 'Pending', N'["/images/math.jpg"]', 0, 0, '2025-10-01 16:27:09.1494776', '2025-10-01 16:27:09.1494776'),
+(@UserID_Cuong, N'Gardening service required', N'Looking for someone to take care of my small garden. Tasks include watering plants and trimming bushes.', NULL, '2025-10-01 16:27:09.1494776', 'Rejected', NULL, 1, 0, '2025-10-01 16:27:09.1494776', '2025-10-01 16:27:09.1494776'),
+(@UserID_Hieu, N'shibaaaa', N'<p>hahahaha</p>', NULL, '2025-10-01 16:41:56.3800916', 'Pending', N'["https://res.cloudinary.com/dgkkdyrug/image/upload/v1759311821/homehelper/posts/2/rwopeesm0g2kjvawfjbs.jpg","https://res.cloudinary.com/dgkkdyrug/image/upload/v1759311821/homehelper/posts/2/oxkqrqmloi6xdtze0ith.webp"]', 0, 0, '2025-10-01 16:41:56.3766667', '2025-10-01 16:41:56.3766667');
 
 -- PostLikes
 INSERT INTO PostLikes (post_like_id, post_id, user_id, liked_at)
 VALUES
 (1, 1, @UserID_An, '2025-09-04 09:00:00'),
-(2, 1, @UserID_Binh, '2025-09-04 09:30:00');
-
--- Comments
-INSERT INTO Comments (comment_id, post_id, user_id, parent_comment_id, content, created_at, updated_at)
+(2, 1, @UserID_Hieu, '2025-09-04 09:30:00');
+--Video
+INSERT INTO Videos (user_id, title, description, video_url, public_id, likes, uploaded_at, is_deleted)
 VALUES
-(1, 1, @UserID_An, NULL, N'Tôi có thể nhận công việc này!', '2025-09-04 09:10:00', '2025-09-04 09:10:00'),
-(2, 1, @UserID_Dung, 1, N'Bạn có thể làm vào sáng Chủ nhật không?', '2025-09-04 09:20:00', '2025-09-04 09:20:00');
+(@UserID_Hieu, N'Mẹo giúp việc', N'rất hay', N'https://res.cloudinary.com/dgkkdyrug/video/upload/v1759312165/homehelper/videos/2/m93itgzhplnw3wshed0v.mp4', N'homehelper/videos/2/m93itgzhplnw3wshed0v', 0, '2025-10-01 16:47:30.393', 0);
+INSERT INTO Comments (post_id, video_id, user_id, parent_comment_id, content, created_at)
+VALUES
+(1, NULL, @UserID_Hieu, NULL, N'hihi', '2025-10-01 16:48:03.163'),
+(2, NULL, @UserID_Hieu, 1, N'nice', '2025-10-01 16:48:20.143');
 
 -- PostServices
 INSERT INTO PostServices (post_service_id, post_id, service_id, variant_id, desired_price, notes)
 VALUES
-(1, 1, 2, 3, 100.00, N'Dọn dẹp toàn bộ nhà 50m²');
-
+(1, 1, 2, 3, 100.00, N'Dọn dẹp toàn bộ nhà 50m²'),
+(2, 4, 3, 5, 1600.00, N'hhhh');
 
 -- Quotes
 INSERT INTO Quotes (quote_id, post_id, tasker_id, variant_id, proposed_price, proposal, status, sent_at)
@@ -597,27 +692,25 @@ VALUES
 (1, 50, 5.00, 2.00, N'Khách hàng được giảm 5%, người giúp việc tăng 2% hoa hồng'),
 (2, 100, 10.00, 5.00, N'Khách hàng được giảm 10%, người giúp việc tăng 5% hoa hồng');
 
--- Videos
-INSERT INTO Videos (video_id, user_id, title, description, video_url, likes, uploaded_at)
-VALUES
-(1, @UserID_An, N'Hướng dẫn nấu phở bò', N'Video hướng dẫn nấu phở bò truyền thống', 'videos/pho_bo.mp4', 20, '2025-09-03 10:00:00');
 
 -- Badges
 INSERT INTO Badges (badge_id, name, description, required_likes, icon_url)
 VALUES
-(1, N'Đầu bếp xuất sắc', N'Danh hiệu cho người có video nấu ăn đạt 20 lượt thích', 20, 'icons/chef_badge.png');
+(1, N'Đầu bếp xuất sắc', N'Danh hiệu cho người có video nấu ăn đạt 20 lượt thích', 20, N'icons/chef_badge.png');
 
 -- UserBadges
 INSERT INTO UserBadges (user_badge_id, user_id, badge_id, awarded_at)
 VALUES
 (1, @UserID_An, 1, '2025-09-04 12:00:00');
 
+
 -- Notifications
 INSERT INTO Notifications (user_id, title, content, type, data, is_read, read_at, created_at, expires_at)
 VALUES
-(@UserID_Binh, N'Tin nhắn mới từ Thanh Hiếu', N'Xin chào', N'Message', N'{"conversation_id":5,"sender_id":@UserID_An,"type":"message"}', 1, '2025-09-13 00:36:47.9966667', '2025-09-03 18:52:36.4166667', NULL),
+(@UserID_Hieu, N'Tin nhắn mới từ Thanh Hiếu', N'Xin chào', N'Message', N'{"conversation_id":5,"sender_id":@UserID_An,"type":"message"}', 1, '2025-09-13 00:36:47.9966667', '2025-09-03 18:52:36.4166667', NULL),
 (@UserID_Dung, N'Đặt dịch vụ mới', N'Bạn đã đặt dịch vụ nấu ăn thành công!', N'Booking', N'{"booking_id":1}', 0, NULL, '2025-09-05 09:10:00', NULL),
 (@UserID_An, N'Nhận công việc mới', N'Bạn được giao dịch vụ nấu ăn cho khách hàng Phạm Thị Dung', N'Booking', N'{"booking_id":1,"customer_name":"Phạm Thị Dung"}', 0, NULL, '2025-09-05 09:15:00', NULL),
 (@UserID_Cuong, N'Thanh toán thành công', N'Bạn đã thanh toán dịch vụ dọn dẹp thành công.', N'Payment', N'{"payment_id":2,"amount":500000}', 0, NULL, '2025-09-06 14:20:00', '2025-09-30 23:59:59'),
-(@UserID_Binh, N'Đánh giá mới', N'Bạn nhận được một đánh giá 5 sao từ khách hàng Lê Thị Hoa.', N'Review', N'{"review_id":1,"rating":5}', 0, NULL, '2025-09-07 18:45:00', NULL);
+(@UserID_Hieu, N'Đánh giá mới', N'Bạn nhận được một đánh giá 5 sao từ khách hàng Lê Thị Hoa.', N'Review', N'{"review_id":1,"rating":5}', 0, NULL, '2025-09-07 18:45:00', NULL);
+
 

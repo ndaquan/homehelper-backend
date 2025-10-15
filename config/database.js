@@ -4,7 +4,7 @@ require("dotenv").config();
 // Cấu hình kết nối SQL Server
 const dbConfig = {
   server: process.env.DB_SERVER || 'localhost',
-  database: process.env.DB_DATABASE || 'HomeHelperDB',
+  database: process.env.DB_DATABASE || 'HomeHelperDB9',
   user: process.env.DB_USER || 'sa',
   password: process.env.DB_PASSWORD || '123456789',
   port: parseInt(process.env.DB_PORT || '1433', 10),
