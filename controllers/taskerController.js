@@ -511,7 +511,28 @@ exports.searchNearbyUsers = async (req, res) => {
     });
   }
 };
+// Lấy danh sách Tasker với khoảng cách từ user đăng nhập
+exports.getTaskersWithDistance = async (req, res) => {
+  try {
+    const userId = req.user.user_id; // Lấy từ JWT qua middleware authenticateToken
 
+    // Lấy vị trí user
+    const userLocation = await Tasker.getUserLocation(userId);
+    if (!userLocation) {
+      return res.status(404).json({ error: 'Không tìm thấy địa chỉ của người dùng' });
+    }
+
+    const { lat: userLat, lng: userLng } = userLocation;
+
+    // Lấy danh sách Tasker với khoảng cách
+    const taskers = await Tasker.getTaskersWithDistance(userLat, userLng);
+
+    res.json(taskers);
+  } catch (err) {
+    console.error('❌ Lỗi khi lấy danh sách Tasker:', err);
+    res.status(500).json({ error: 'Lỗi server' });
+  }
+};
 function toRad(degrees) {
   return (degrees * Math.PI) / 180;
 }
