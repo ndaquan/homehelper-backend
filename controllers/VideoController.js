@@ -3,6 +3,7 @@ const Video = require('../models/Video');
 const Comment = require('../models/Comment');
 const { deleteFile } = require('../config/cloudinary');
 const { moderateContent } = require('../config/gemini.service');
+const axios = require('axios');
 
 class VideoController {
   static async uploadVideo(req, res) {
@@ -11,11 +12,11 @@ class VideoController {
       const userId = req.user.user_id;
 
       if (!req.file) {
-        return res.status(400).json({ error: 'Please provide a video file' });
+        return res.status(400).json({ error: 'Vui lòng cung cấp file video' });
       }
 
       if (!title) {
-        return res.status(400).json({ error: 'Please provide a video title' });
+        return res.status(400).json({ error: 'Vui lòng cung cấp tiêu đề video' });
       }
 
       const videoUrl = req.file.path;
@@ -24,7 +25,7 @@ class VideoController {
       const video = await Video.createVideo(userId, title, description, videoUrl, publicId);
 
       res.status(201).json({
-        message: 'Video uploaded successfully',
+        message: 'Upload video thành công',
         video: {
           video_id: video.video_id,
           title: video.title,
@@ -32,11 +33,78 @@ class VideoController {
           video_url: video.video_url,
           public_id: video.public_id,
           uploaded_at: video.uploaded_at,
+          status: video.status,
         },
       });
     } catch (error) {
-      console.error('❌ Error uploading video:', error);
-      res.status(500).json({ error: 'Server error while uploading video' });
+      console.error('❌ Lỗi khi upload video:', error);
+      res.status(500).json({ error: 'Lỗi server khi upload video' });
+    }
+  }
+
+  static async updateVideo(req, res) {
+    try {
+      const { videoId } = req.params;
+      const { title, description } = req.body;
+      const userId = req.user.user_id;
+
+      if (!title) {
+        return res.status(400).json({ error: 'Vui lòng cung cấp tiêu đề video' });
+      }
+
+      const video = await Video.checkVideoOwnership(videoId, userId);
+      if (!video) {
+        return res.status(403).json({ error: 'Bạn không có quyền chỉnh sửa video này hoặc video không tồn tại' });
+      }
+
+      if (video.status !== 'Pending') {
+        return res.status(403).json({ error: 'Chỉ có thể chỉnh sửa video ở trạng thái Pending' });
+      }
+
+      let videoUrl = video.video_url;
+      let publicId = video.public_id;
+
+      if (!videoUrl) {
+        return res.status(400).json({ error: 'Video URL hiện tại không hợp lệ. Vui lòng cung cấp file video mới.' });
+      }
+
+      try {
+        const response = await axios.head(videoUrl);
+        if (response.status !== 200) {
+          return res.status(400).json({ error: 'File video hiện tại không tồn tại trên Cloudinary. Vui lòng cung cấp file video mới.' });
+        }
+      } catch (error) {
+        console.warn('⚠️ Lỗi khi kiểm tra file video trên Cloudinary:', error.message);
+        return res.status(400).json({ error: 'File video hiện tại không tồn tại hoặc không truy cập được. Vui lòng cung cấp file video mới.' });
+      }
+
+      if (req.file) {
+        try {
+          await deleteFile(video.public_id, 'video');
+          videoUrl = req.file.path;
+          publicId = req.file.filename;
+        } catch (deleteError) {
+          console.warn('⚠️ Không thể xóa file cũ trên Cloudinary:', deleteError.message);
+        }
+      }
+
+      const updatedVideo = await Video.updateVideo(videoId, userId, title, description, videoUrl, publicId);
+
+      res.status(200).json({
+        message: 'Cập nhật video thành công',
+        video: {
+          video_id: updatedVideo.video_id,
+          title: updatedVideo.title,
+          description: updatedVideo.description,
+          video_url: updatedVideo.video_url,
+          public_id: updatedVideo.public_id,
+          uploaded_at: updatedVideo.uploaded_at,
+          status: updatedVideo.status,
+        },
+      });
+    } catch (error) {
+      console.error('❌ Lỗi khi cập nhật video:', error);
+      res.status(500).json({ error: `Lỗi server khi cập nhật video: ${error.message}` });
     }
   }
 
@@ -47,20 +115,48 @@ class VideoController {
 
       const video = await Video.checkVideoOwnership(videoId, userId);
       if (!video) {
-        return res.status(403).json({ error: 'You do not have permission to delete this video or it does not exist' });
+        return res.status(403).json({ error: 'Bạn không có quyền xóa video này hoặc video không tồn tại' });
       }
 
-      await deleteFile(video.public_id, 'video');
+      try {
+        await deleteFile(video.public_id, 'video');
+      } catch (deleteError) {
+        console.warn('⚠️ Không thể xóa file video trên Cloudinary:', deleteError.message);
+      }
 
       const deleted = await Video.deleteVideo(videoId, userId);
       if (!deleted) {
-        return res.status(404).json({ error: 'Video not found' });
+        return res.status(404).json({ error: 'Video không tồn tại' });
       }
 
-      res.status(200).json({ message: 'Video deleted successfully' });
+      res.status(200).json({ message: 'Xóa video thành công' });
     } catch (error) {
-      console.error('❌ Error deleting video:', error);
-      res.status(500).json({ error: 'Server error while deleting video' });
+      console.error('❌ Lỗi khi xóa video:', error);
+      res.status(500).json({ error: 'Lỗi server khi xóa video' });
+    }
+  }
+
+  static async deleteVideoByStaff(req, res) {
+    try {
+      const { videoId } = req.params;
+
+      const video = await Video.getVideoById(videoId);
+      if (!video) {
+        return res.status(404).json({ error: 'Video không tồn tại' });
+      }
+
+      try {
+        await deleteFile(video.public_id, 'video');
+      } catch (deleteError) {
+        console.warn('⚠️ Không thể xóa file video trên Cloudinary:', deleteError.message);
+      }
+
+      await Video.deleteVideoByStaff(videoId);
+
+      res.status(200).json({ message: 'Xóa video thành công bởi Staff' });
+    } catch (error) {
+      console.error('❌ Lỗi khi xóa video bởi Staff:', error);
+      res.status(500).json({ error: `Lỗi server khi xóa video: ${error.message}` });
     }
   }
 
@@ -68,12 +164,12 @@ class VideoController {
     try {
       const videos = await Video.getAllVideos();
       res.status(200).json({
-        message: 'All videos retrieved successfully',
+        message: 'Lấy tất cả video thành công',
         videos,
       });
     } catch (error) {
-      console.error('❌ Error fetching all videos:', error);
-      res.status(500).json({ error: 'Server error while fetching all videos' });
+      console.error('❌ Lỗi khi lấy tất cả video:', error);
+      res.status(500).json({ error: 'Lỗi server khi lấy tất cả video' });
     }
   }
 
@@ -102,12 +198,12 @@ class VideoController {
       const videos = await Video.getVideosByUser(userId);
 
       res.status(200).json({
-        message: 'Videos retrieved successfully',
+        message: 'Lấy video của người dùng thành công',
         videos,
       });
     } catch (error) {
-      console.error('❌ Error fetching videos:', error);
-      res.status(500).json({ error: 'Server error while fetching videos' });
+      console.error('❌ Lỗi khi lấy video của người dùng:', error);
+      res.status(500).json({ error: 'Lỗi server khi lấy video của người dùng' });
     }
   }
 
@@ -120,13 +216,11 @@ class VideoController {
         return res.status(400).json({ error: 'Vui lòng cung cấp video_id và nội dung comment' });
       }
 
-      // Kiểm tra video tồn tại
       const video = await Video.getVideoById(video_id);
       if (!video) {
         return res.status(404).json({ error: 'Video không tồn tại' });
       }
 
-      // Kiểm duyệt nội dung comment
       const isContentValid = await moderateContent(content);
       if (!isContentValid) {
         return res.status(400).json({ error: 'Nội dung comment không phù hợp, chứa từ ngữ không được phép' });
@@ -136,13 +230,13 @@ class VideoController {
         video_id,
         user_id,
         parent_comment_id: parent_comment_id || null,
-        content
+        content,
       };
 
       const comment = await Comment.create(commentData);
       res.status(201).json({
-        message: 'Comment tạo thành công',
-        comment
+        message: 'Tạo comment thành công',
+        comment,
       });
     } catch (error) {
       console.error('❌ Lỗi khi tạo comment:', error);
@@ -174,41 +268,39 @@ class VideoController {
         return res.status(400).json({ error: 'Nội dung bình luận không phù hợp, chứa từ ngữ không được phép' });
       }
 
-      const updatedComment = await comment.update({ content }); // Sử dụng phương thức instance
+      const updatedComment = await comment.update({ content });
       res.status(200).json({
         message: 'Cập nhật bình luận thành công',
-        comment: updatedComment
+        comment: updatedComment,
       });
     } catch (error) {
       console.error('❌ Lỗi khi cập nhật bình luận:', error);
       res.status(500).json({ error: `Lỗi khi cập nhật bình luận: ${error.message}` });
     }
   }
-static async deleteVideoComment(req, res) {
-  try {
-    const { comment_id } = req.params;
-    const user_id = req.user.user_id;
 
-    // Tìm bình luận theo ID
-    const comment = await Comment.findById(comment_id);
-    if (!comment) {
-      return res.status(404).json({ error: 'Bình luận không tồn tại' });
+  static async deleteVideoComment(req, res) {
+    try {
+      const { comment_id } = req.params;
+      const user_id = req.user.user_id;
+
+      const comment = await Comment.findById(comment_id);
+      if (!comment) {
+        return res.status(404).json({ error: 'Bình luận không tồn tại' });
+      }
+
+      if (comment.user_id !== user_id) {
+        return res.status(403).json({ error: 'Bạn không có quyền xóa bình luận này' });
+      }
+
+      await comment.delete();
+
+      res.status(200).json({ message: 'Xóa bình luận thành công' });
+    } catch (error) {
+      console.error('❌ Lỗi khi xóa bình luận:', error);
+      res.status(500).json({ error: `Lỗi khi xóa bình luận: ${error.message}` });
     }
-
-    // Kiểm tra quyền sở hữu bình luận
-    if (comment.user_id !== user_id) {
-      return res.status(403).json({ error: 'Bạn không có quyền xóa bình luận này' });
-    }
-
-    // Gọi phương thức delete của instance Comment
-    await comment.delete();
-
-    res.status(200).json({ message: 'Bình luận xóa thành công' });
-  } catch (error) {
-    console.error('❌ Lỗi khi xóa bình luận:', error);
-    res.status(500).json({ error: `Lỗi khi xóa bình luận: ${error.message}` });
   }
-}
 
   static async getVideoComments(req, res) {
     try {
@@ -218,38 +310,82 @@ static async deleteVideoComment(req, res) {
       const options = {
         page: parseInt(page) || 1,
         limit: parseInt(limit) || 20,
-        includeReplies: includeReplies !== 'false'
+        includeReplies: includeReplies !== 'false',
       };
 
       const result = await Comment.findByVideoId(videoId, options);
       res.status(200).json({
         message: 'Lấy danh sách comment thành công',
-        ...result
+        ...result,
       });
     } catch (error) {
       console.error('❌ Lỗi khi lấy comment:', error);
       res.status(500).json({ error: `Lỗi khi lấy comment: ${error.message}` });
     }
   }
-static async getVideoCommentTree(req, res) {
-  try {
-    const { videoId } = req.params;
-    const { limit } = req.query;
 
-    const options = {
-      limit: parseInt(limit) || 50
-    };
+  static async getVideoCommentTree(req, res) {
+    try {
+      const { videoId } = req.params;
+      const { limit } = req.query;
 
-    const commentTree = await Comment.getCommentTree(videoId, options);
-    res.status(200).json({
-      message: 'Lấy comment tree thành công',
-      comments: commentTree || [] // Đảm bảo luôn trả về mảng, ngay cả khi rỗng
-    });
-  } catch (error) {
-    console.error('❌ Lỗi khi lấy comment tree:', error);
-    res.status(500).json({ error: `Lỗi khi lấy comment tree: ${error.message}` });
+      const options = {
+        limit: parseInt(limit) || 50,
+      };
+
+      const commentTree = await Comment.getCommentTree(videoId, options);
+      res.status(200).json({
+        message: 'Lấy comment tree thành công',
+        comments: commentTree || [],
+      });
+    } catch (error) {
+      console.error('❌ Lỗi khi lấy comment tree:', error);
+      res.status(500).json({ error: `Lỗi khi lấy comment tree: ${error.message}` });
+    }
   }
-}
+
+  static async getPendingVideos(req, res) {
+    try {
+      const { page = 1, limit = 5 } = req.query;
+      const videos = await Video.getAllVideosForStaff(page, limit);
+      res.status(200).json({
+        message: 'Lấy danh sách video thành công',
+        videos,
+      });
+    } catch (error) {
+      console.error('❌ Lỗi khi lấy danh sách video:', error);
+      res.status(500).json({ error: 'Lỗi server khi lấy danh sách video' });
+    }
+  }
+
+  static async updateVideoStatus(req, res) {
+    try {
+      const { videoId } = req.params;
+      const { status } = req.body;
+
+      if (!status) {
+        return res.status(400).json({ error: 'Vui lòng cung cấp trạng thái video (Approved hoặc Rejected)' });
+      }
+
+      const updatedVideo = await Video.updateVideoStatus(videoId, status);
+
+      res.status(200).json({
+        message: 'Cập nhật trạng thái video thành công',
+        video: {
+          video_id: updatedVideo.video_id,
+          title: updatedVideo.title,
+          description: updatedVideo.description,
+          video_url: updatedVideo.video_url,
+          public_id: updatedVideo.public_id,
+          uploaded_at: updatedVideo.uploaded_at,
+          status: updatedVideo.status,
+        },
+      });
+    } catch (error) {
+      console.error('❌ Lỗi khi cập nhật trạng thái video:', error);
+      res.status(500).json({ error: `Lỗi server khi cập nhật trạng thái video: ${error.message}` });
+    }
+  }
 }
 
 module.exports = VideoController;

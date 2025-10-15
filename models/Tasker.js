@@ -269,6 +269,39 @@ class Tasker {
       throw new Error(`Lỗi lấy tasker với reviews: ${error.message}`);
     }
   }
+   static async getUserLocation(userId) {
+    const result = await executeQuery(
+      `SELECT TOP 1 lat, lng 
+       FROM Addresses 
+       WHERE user_id = @userId`,
+      { userId }
+    );
+    return result.recordset && result.recordset.length > 0 ? result.recordset[0] : null;
+  }
+
+  // Lấy danh sách Tasker với khoảng cách từ vị trí user
+  static async getTaskersWithDistance(userLat, userLng) {
+    const result = await executeQuery(
+      `SELECT 
+         u.user_id, 
+         u.name, 
+         u.email, 
+         u.phone, 
+         a.address, 
+         a.lat, 
+         a.lng,
+         ( 6371 * acos( 
+           cos( radians(@userLat) ) * cos( radians( a.lat ) ) * cos( radians( a.lng ) - radians(@userLng) ) + 
+           sin( radians(@userLat) ) * sin( radians( a.lat ) ) 
+         ) ) AS distance_km
+       FROM Users u
+       INNER JOIN Addresses a ON u.user_id = a.user_id
+       WHERE u.role = 'Tasker'
+       ORDER BY distance_km ASC`,
+      { userLat, userLng }
+    );
+    return result.recordset;
+  }
 }
 
 module.exports = Tasker;

@@ -21,5 +21,7 @@ router.get("/by-variant/:variantId", taskerController.getByVariant);
 
 // GET /api/taskers/:id
 router.get("/:id", taskerController.getById);
+// API endpoint: Lấy danh sách Tasker với khoảng cách
+router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
 
 module.exports = router;
