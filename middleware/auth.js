@@ -140,7 +140,7 @@ const requireOwnership = (resourceType) => {
     }
   };
 };
-
+const requireStaff = authorizeRole('Staff', 'Admin');
 module.exports = {
   authenticateToken,
   authorizeRole,
@@ -148,5 +148,6 @@ module.exports = {
   requireTasker,
   requireCustomer,
   requireAuth,
-  requireOwnership
+  requireOwnership,
+  requireStaff
 };

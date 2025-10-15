@@ -71,7 +71,6 @@ app.use('/api/cccd', require('./routes/cccd'));
 app.use("/uploads", express.static("uploads"));
 
 // Routes
-// app.use("/api/taskers", require("./routes/taskers"));
 app.use("/api/tasker-profile", require("./routes/taskerProfile"));
 // app.use('/api/users', require('./routes/users'));
 app.use("/api/bookings", require("./routes/bookings"));
