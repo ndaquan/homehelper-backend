@@ -1,9 +1,8 @@
 // models/Rating.js
 const { executeQuery } = require("../config/database");
+const { processReview } = require("../config/gemini.service"); // đường dẫn đúng tới file moderation.js
 
 class Rating {
-  // Tạo rating mới
-  // models/Rating.js
   static async getByTaskerId(taskerId) {
     const query = `
     SELECT 
@@ -18,6 +17,7 @@ class Rating {
     JOIN Bookings b ON r.booking_id = b.booking_id
     JOIN Services s ON b.service_id = s.service_id
     WHERE r.reviewee_id = @param1
+    AND r.status = 1   --  Chỉ lấy các đánh giá đã duyệt
     ORDER BY r.created_at DESC
   `;
 
@@ -46,6 +46,7 @@ class Rating {
 
     return { reviews, average, total, ratingsCount };
   }
+
   static async create({
     booking_id,
     reviewer_id,
@@ -54,28 +55,55 @@ class Rating {
     comment,
   }) {
     try {
+      const reviewCheck = await processReview(comment, rating);
+
+      if (!reviewCheck.allow) {
+        throw new Error(
+          "Bình luận chứa từ ngữ không phù hợp. Không thể đăng đánh giá."
+        );
+      }
+
       const query = `
-      INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, created_at)
+      INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, status, created_at)
       OUTPUT INSERTED.*
-      VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE())
+      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE())
     `;
-      const params = [booking_id, reviewer_id, reviewee_id, rating, comment];
+      const params = [
+        booking_id,
+        reviewer_id,
+        reviewee_id,
+        rating,
+        comment,
+        reviewCheck.status,
+      ];
       const result = await executeQuery(query, params);
       const newRating = result.recordset[0];
 
-      // 🔥 Sau khi insert -> cập nhật Taskers.rating = average rating
-      const updateQuery = `
-      UPDATE Taskers
-      SET rating = (
-        SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
-        FROM Ratings
-        WHERE reviewee_id = @param1
-      )
-      WHERE tasker_id = @param1
-    `;
-      await executeQuery(updateQuery, [reviewee_id]);
+      // Lấy reviewer_name
+      const reviewerNameResult = await executeQuery(
+        "SELECT name FROM Users WHERE user_id = @param1",
+        [reviewer_id]
+      );
+      const reviewer_name = reviewerNameResult.recordset[0]?.name || null;
 
-      return newRating;
+      if (reviewCheck.status === 1) {
+        const updateQuery = `
+        UPDATE Taskers
+        SET rating = (
+          SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
+          FROM Ratings
+          WHERE reviewee_id = @param1 AND status = 1
+        )
+        WHERE tasker_id = @param1
+      `;
+        await executeQuery(updateQuery, [reviewee_id]);
+      }
+
+      return {
+        ...newRating,
+        reviewer_name,
+        moderation_message: reviewCheck.message,
+      };
     } catch (error) {
       const msg = String(error.message || "");
       if (
@@ -101,6 +129,7 @@ class Rating {
         r.reviewee_id,
         r.rating,
         r.comment,
+        r.status, 
         r.created_at,
         u.name AS reviewer_name,
         uu.name AS reviewee_name,
@@ -114,6 +143,45 @@ class Rating {
     `;
     const result = await executeQuery(query);
     return { ratings: result?.recordset || [] };
+  }
+  static async approve(id) {
+    // Cập nhật trạng thái rating sang 1 (đã duyệt)
+    await executeQuery(
+      `UPDATE Ratings SET status = 1 WHERE rating_id = @param1`,
+      [id]
+    );
+
+    // Cập nhật lại điểm trung bình cho tasker
+    await executeQuery(
+      `
+      UPDATE Taskers
+      SET rating = (
+        SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
+        FROM Ratings
+        WHERE reviewee_id = (
+          SELECT reviewee_id FROM Ratings WHERE rating_id = @param1
+        )
+        AND status = 1
+      )
+      WHERE tasker_id = (
+        SELECT reviewee_id FROM Ratings WHERE rating_id = @param1
+      )
+    `,
+      [id]
+    );
+  }
+  static async reject(id) {
+    const result = await executeQuery(
+      `UPDATE Ratings SET status = 2 WHERE rating_id = @param1`,
+      [parseInt(id)]
+    );
+    console.log("Reject rating:", id, "Rows affected:", result.rowsAffected);
+    const check = await executeQuery(
+      `SELECT rating_id, status FROM Ratings WHERE rating_id = @param1`,
+      [parseInt(id)]
+    );
+    console.log("Status sau reject:", check.recordset[0]);
+    return check.recordset[0];
   }
 }
 

@@ -6,10 +6,10 @@ class BookingController {
     try {
       const taskerId = req.params.taskerId;
       const customerId = req.user.userId; // Đúng với middleware của bạn       console.log("customerId:", customerId, "taskerId:", taskerId);
-      console.log("customerId:", customerId, "taskerId:", taskerId);
+      // console.log("customerId:", customerId, "taskerId:", taskerId);
 
       const bookings = await Booking.getCompletedBookings(customerId, taskerId);
-      console.log("Completed bookings:", bookings);
+      // console.log("Completed bookings:", bookings);
 
       // Tìm booking "Hoàn Thành" nào chưa được đánh giá
       let canRate = false;
@@ -28,6 +28,7 @@ class BookingController {
           break;
         }
       }
+    // console.log("💬 canRate result:", { canRate, bookingId, alreadyRated });
 
       // Nếu tất cả booking đều đã được đánh giá
       if (!canRate) {
@@ -48,9 +49,9 @@ class BookingController {
       res.status(500).json({ error: error.message });
     }
   }
-  
-    // Danh sách booking của user (khách hàng)
-    static async listMyBookings(req, res) {
+
+  // Danh sách booking của user (khách hàng)
+  static async listMyBookings(req, res) {
     try {
       const userId = req.user.userId;
       const { status = null, limit = 50 } = req.query;
@@ -78,15 +79,17 @@ class BookingController {
       if (status) {
         // Accept English or Vietnamese. Simple map for common values
         const vnMap = {
-          'Pending': 'Chờ xử lý',
-          'Accepted': 'Đã chấp nhận',
-          'In Progress': 'Đang tiến hành',
-          'Completed': 'Hoàn thành',
-          'Cancelled': 'Hủy'
+          Pending: "Chờ xử lý",
+          Accepted: "Đã chấp nhận",
+          "In Progress": "Đang tiến hành",
+          Completed: "Hoàn thành",
+          Cancelled: "Hủy",
         };
         const vn = vnMap[status] || null;
         if (vn) {
-          query += ` AND (b.status = @param${params.length + 1} OR b.status = @param${params.length + 2})`;
+          query += ` AND (b.status = @param${
+            params.length + 1
+          } OR b.status = @param${params.length + 2})`;
           params.push(status, vn);
         } else {
           query += ` AND b.status = @param${params.length + 1}`;
@@ -94,13 +97,15 @@ class BookingController {
         }
       }
 
-      query += ' ORDER BY ISNULL(b.start_time, b.booking_time) DESC';
+      query += " ORDER BY ISNULL(b.start_time, b.booking_time) DESC";
 
       const result = await executeQuery(query, params);
       return res.json({ success: true, data: result.recordset || [] });
     } catch (error) {
-      console.error('❌ Error listing my bookings:', error);
-      return res.status(500).json({ success: false, message: 'Internal server error' });
+      console.error("❌ Error listing my bookings:", error);
+      return res
+        .status(500)
+        .json({ success: false, message: "Internal server error" });
     }
   }
 
