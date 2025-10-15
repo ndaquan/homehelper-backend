@@ -8,7 +8,7 @@ class Booking {
     FROM Bookings
     WHERE customer_id = @param1
       AND tasker_id = @param2
-      AND LOWER(LTRIM(RTRIM(status))) LIKE N'%hoàn thành%'
+      AND status = N'Hoàn thành'
   `;
     const result = await executeQuery(query, [userId, taskerId]);
     return result.recordset || [];

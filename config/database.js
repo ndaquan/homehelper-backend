@@ -3,14 +3,14 @@ require("dotenv").config();
 
 // Cấu hình kết nối SQL Server
 const dbConfig = {
-  server: process.env.DB_SERVER || 'localhost',
-  database: process.env.DB_DATABASE || 'HomeHelperDB',
-  user: process.env.DB_USER || 'sa',
-  password: process.env.DB_PASSWORD || '123456789',
-  port: parseInt(process.env.DB_PORT || '1433', 10),
+  server: process.env.DB_SERVER || "localhost",
+  database: process.env.DB_DATABASE || "HomeHelperDB",
+  user: process.env.DB_USER || "sa",
+  password: process.env.DB_PASSWORD || "123456789",
+  port: parseInt(process.env.DB_PORT || "1433", 10),
   options: {
     encrypt: false, // Nếu dùng Azure thì để true
-    trustServerCertificate: true // Cho phép self-signed cert
+    trustServerCertificate: true, // Cho phép self-signed cert
   },
   pool: {
     max: 10,
@@ -24,9 +24,13 @@ let pool = null;
 
 // Hàm tạo pool mới
 function createPool() {
-  if (pool) { try { pool.close(); } catch(e){} }
+  if (pool) {
+    try {
+      pool.close();
+    } catch (e) {}
+  }
   pool = new sql.ConnectionPool(dbConfig);
-  pool.on('error', (err) => console.error('Database connection error:', err));
+  pool.on("error", (err) => console.error("Database connection error:", err));
   return pool;
 }
 
@@ -35,10 +39,10 @@ async function connectDB() {
   try {
     if (!pool) pool = createPool();
     if (!pool.connected) await pool.connect();
-    console.log('✅ Kết nối SQL Server thành công!');
+    console.log("✅ Kết nối SQL Server thành công!");
     return pool;
   } catch (e) {
-    console.error('❌ Lỗi kết nối database:', e);
+    console.error("❌ Lỗi kết nối database:", e);
     throw e;
   }
 }
@@ -72,9 +76,9 @@ async function executeQuery(query, params = {}) {
     // Bind parameters nếu có (hỗ trợ cả object và array)
     if (Array.isArray(params)) {
       params.forEach((param, index) => {
-        request.input(`param${index + 1}`, param);  
+        request.input(`param${index + 1}`, param);
       });
-    } else if (typeof params === 'object' && params !== null) {
+    } else if (typeof params === "object" && params !== null) {
       Object.entries(params).forEach(([key, value]) => {
         request.input(key, value);
       });
@@ -113,7 +117,7 @@ async function executeNonQuery(query, params = {}) {
     if (!pool) {
       await connectDB();
     }
-    
+
     const request = pool.request();
 
     // Bind parameters nếu có
@@ -122,16 +126,17 @@ async function executeNonQuery(query, params = {}) {
     });
 
     const result = await request.query(query);
-    
+
     // Lấy IDENTITY value từ SCOPE_IDENTITY()
-    const identityResult = await request.query('SELECT SCOPE_IDENTITY() as id');
-    const insertId = identityResult.recordset && identityResult.recordset.length > 0 
-      ? identityResult.recordset[0].id 
-      : null;
-    
+    const identityResult = await request.query("SELECT SCOPE_IDENTITY() as id");
+    const insertId =
+      identityResult.recordset && identityResult.recordset.length > 0
+        ? identityResult.recordset[0].id
+        : null;
+
     return {
       changes: result.rowsAffected[0],
-      insertId: insertId
+      insertId: insertId,
     };
   } catch (error) {
     console.error("❌ Lỗi thực thi non-query:", error);
@@ -145,7 +150,7 @@ module.exports = {
   executeQuery,
   executeNonQuery,
   executeStoredProcedure,
-  getPool,   // ✅ export
+  getPool, // ✅ export
   sql,
-  pool
+  pool,
 };
