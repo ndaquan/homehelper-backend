@@ -33,7 +33,10 @@ class Video {
     }
   }
 
-  static async getAllVideosForStaff(page = 1, limit = 5) {
+static async getAllVideosForStaff(page = 1, limit = 5) {
+    // Ép kiểu về số nguyên
+    page = parseInt(page, 10) || 1;
+    limit = parseInt(limit, 10) || 5;
     const query = `
       SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status, u.name AS expert, t.rating
       FROM Videos v
@@ -44,7 +47,7 @@ class Video {
       OFFSET @param1 ROWS FETCH NEXT @param2 ROWS ONLY
     `;
     try {
-      const result = await executeQuery(query, [(page - 1) * limit, limit]);
+      const result = await executeQuery(query, [ (page - 1) * limit, limit ]);
       return result.recordset;
     } catch (error) {
       throw new Error(`Lỗi khi lấy tất cả video cho Staff: ${error.message}`);
