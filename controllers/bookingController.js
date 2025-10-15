@@ -175,9 +175,13 @@ class BookingController {
   static async canRateTasker(req, res) {
     try {
       const taskerId = req.params.taskerId;
-      const customerId = req.user.userId;
+      const customerId = req.user.userId; // Đúng với middleware của bạn       console.log("customerId:", customerId, "taskerId:", taskerId);
+      // console.log("customerId:", customerId, "taskerId:", taskerId);
 
       const bookings = await Booking.getCompletedBookings(customerId, taskerId);
+      // console.log("Completed bookings:", bookings);
+
+      // Tìm booking "Hoàn Thành" nào chưa được đánh giá
       let canRate = false;
       let bookingId = null;
       let alreadyRated = false;
@@ -194,6 +198,7 @@ class BookingController {
           break;
         }
       }
+    // console.log("💬 canRate result:", { canRate, bookingId, alreadyRated });
 
       if (!canRate) {
         return res.json({
@@ -248,7 +253,9 @@ class BookingController {
         };
         const vn = vnMap[status] || null;
         if (vn) {
-          query += ` AND (b.status = @param${params.length + 1} OR b.status = @param${params.length + 2})`;
+          query += ` AND (b.status = @param${
+            params.length + 1
+          } OR b.status = @param${params.length + 2})`;
           params.push(status, vn);
         } else {
           query += ` AND b.status = @param${params.length + 1}`;
