@@ -38,6 +38,8 @@ cloudinary.config({
 let avatarUpload = null;
 // 2) Post images upload (dynamic folder per user: <base>/posts/<userId>)
 let postImagesUpload = null;
+// 3) Certificate upload (dynamic folder per user: <base>/certificates/<userId>)
+let certificateUpload = null;
 
 if (CloudinaryStorage) {
   const avatarStorage = new CloudinaryStorage({
@@ -63,6 +65,22 @@ if (CloudinaryStorage) {
     },
   });
   postImagesUpload = multer({ storage: postImagesStorage });
+
+  const certificateStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+      const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+      return {
+        folder: `${CLOUDINARY_FOLDER_BASE}/certificates/${userId}`,
+        // Accept common image formats plus pdf (auto handles)
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
+        resource_type: 'auto',
+        // Switch to authenticated delivery so direct URLs require signing
+        type: 'authenticated',
+      };
+    },
+  });
+  certificateUpload = multer({ storage: certificateStorage });
 }
 
 // Fallback: memory storage for manual upload_stream usage in routes (if CloudinaryStorage not installed)
@@ -102,12 +120,32 @@ const deleteFile = async (publicId, resourceType = 'image') => {
     throw new Error(`Failed to delete file from Cloudinary: ${error.message}`);
   }
 };
+
+// Helper: generate a short-lived signed URL for an authenticated asset
+// ttlSeconds default 3600 (1h). Cloudinary signed URLs are created via sign_url util.
+const generateSignedCertificateUrl = (publicId, { resource_type = 'image', ttlSeconds = 3600 } = {}) => {
+  if (!publicId) return null;
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds; // epoch seconds
+  // cloudinary.url with sign_url true will append token; for authenticated assets we also can use private_download_url for downloads
+  const url = cloudinary.url(publicId, {
+    resource_type,
+    type: 'authenticated',
+    sign_url: true,
+    expires_at: expiresAt,
+    secure: true,
+    // Always provide an image preview, even for PDFs: first page as JPG with auto quality
+    transformation: [{ page: 1, fetch_format: 'jpg', quality: 'auto' }],
+  });
+  return { url, expiresAt: expiresAt * 1000 };
+};
 module.exports = {
   cloudinary,
   // Prefer these if multer-storage-cloudinary is installed; otherwise use memoryUpload in routes
   avatarUpload,
   postImagesUpload,
+  certificateUpload,
   memoryUpload,
   videoUpload,
   deleteFile,
+  generateSignedCertificateUrl,
 };

@@ -95,6 +95,7 @@ app.use("/api/blogs", require("./routes/blogs"));
 app.use("/api/uploads", require("./routes/uploads"));
 app.use("/api/quotes", require("./routes/quotes"));
 app.use("/api/videos", require("./routes/videoRoutes"));
+app.use("/api/negotiations", require("./routes/negotiations"));
 // app.use('/api/users', require('./routes/users'));
 // app.use('/api/bookings', require('./routes/bookings'));
 // app.use('/api/posts', require('./routes/posts'));
@@ -114,11 +115,17 @@ app.get('/test-ocr', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'test-ocr.html'));
 });
 
-// 404 handler
-app.use("*", (req, res) => {
+// 404 handler with logging
+app.use((req, res) => {
+  console.warn("⚠️ 404 Not Found:", req.method, req.originalUrl, "Headers:", {
+    accept: req.headers['accept'],
+    contentType: req.headers['content-type'],
+    auth: req.headers['authorization'] ? 'present' : 'none'
+  });
   res.status(404).json({
     error: "API endpoint không tồn tại",
     path: req.originalUrl,
+    method: req.method
   });
 });
 

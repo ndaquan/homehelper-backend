@@ -175,9 +175,13 @@ class BookingController {
   static async canRateTasker(req, res) {
     try {
       const taskerId = req.params.taskerId;
-      const customerId = req.user.userId;
+      const customerId = req.user.userId; // Đúng với middleware của bạn       console.log("customerId:", customerId, "taskerId:", taskerId);
+      // console.log("customerId:", customerId, "taskerId:", taskerId);
 
       const bookings = await Booking.getCompletedBookings(customerId, taskerId);
+      // console.log("Completed bookings:", bookings);
+
+      // Tìm booking "Hoàn Thành" nào chưa được đánh giá
       let canRate = false;
       let bookingId = null;
       let alreadyRated = false;
@@ -194,6 +198,7 @@ class BookingController {
           break;
         }
       }
+    // console.log("💬 canRate result:", { canRate, bookingId, alreadyRated });
 
       if (!canRate) {
         return res.json({
@@ -213,6 +218,7 @@ class BookingController {
   // ============================================
   // 5️⃣ (Cũ) Danh sách booking của user
   // ============================================
+  // Danh sách booking của user (khách hàng)
   static async listMyBookings(req, res) {
     try {
       const userId = req.user.userId;
@@ -248,7 +254,9 @@ class BookingController {
         };
         const vn = vnMap[status] || null;
         if (vn) {
-          query += ` AND (b.status = @param${params.length + 1} OR b.status = @param${params.length + 2})`;
+          query += ` AND (b.status = @param${
+            params.length + 1
+          } OR b.status = @param${params.length + 2})`;
           params.push(status, vn);
         } else {
           query += ` AND b.status = @param${params.length + 1}`;
@@ -267,6 +275,92 @@ class BookingController {
         .json({ success: false, message: "Internal server error" });
     }
   }
+
+  // Get booking details by ID
+  static async getBookingDetails(req, res) {
+    try {
+      const bookingId = parseInt(req.params.bookingId, 10);
+      if (!bookingId) {
+        return res.status(400).json({ success: false, message: 'bookingId không hợp lệ' });
+      }
+      // Allow either participant (customer or tasker) to fetch details; otherwise 403
+      const detailsRes = await executeQuery(
+        `
+          SELECT 
+            b.booking_id,
+            b.customer_id,
+            b.tasker_id,
+            b.service_id,
+            b.variant_id,
+            b.start_time,
+            b.end_time,
+            b.location,
+            b.status,
+            b.final_price,
+            s.name AS service_name,
+            sv.variant_name,
+            sv.unit,
+            sv.price_min,
+            sv.price_max,
+            sv.specific_price,
+            uc.name AS customer_name,
+            ut.name AS tasker_name
+          FROM Bookings b
+          LEFT JOIN Services s ON b.service_id = s.service_id
+          LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
+          LEFT JOIN Users uc ON uc.user_id = b.customer_id
+          LEFT JOIN Users ut ON ut.user_id = b.tasker_id
+          WHERE b.booking_id = @param1
+        `,
+        [bookingId]
+      );
+      const data = detailsRes.recordset?.[0];
+      if (!data) {
+        return res.status(404).json({ success: false, message: 'Booking không tồn tại' });
+      }
+      const userId = req.user.userId;
+      if (String(data.customer_id) !== String(userId) && String(data.tasker_id) !== String(userId)) {
+        return res.status(403).json({ success: false, message: 'Không có quyền xem booking này' });
+      }
+      return res.json({ success: true, data });
+    } catch (error) {
+      console.error('❌ Error getting booking details:', error);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  // Update final price for a booking (tasker approval of negotiation)
+  static async updateFinalPrice(req, res) {
+    try {
+      const bookingId = parseInt(req.params.bookingId, 10);
+      const { price } = req.body || {};
+      if (!bookingId || !Number.isFinite(Number(price))) {
+        return res.status(400).json({ success: false, message: 'bookingId hoặc price không hợp lệ' });
+      }
+      // Basic authorization: either customer or tasker of this booking
+      const bookingRes = await executeQuery(
+        `SELECT booking_id, customer_id, tasker_id FROM Bookings WHERE booking_id = @param1`,
+        [bookingId]
+      );
+      const booking = bookingRes.recordset?.[0];
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'Booking không tồn tại' });
+      }
+      const userId = req.user.userId;
+      if (String(booking.customer_id) !== String(userId) && String(booking.tasker_id) !== String(userId)) {
+        return res.status(403).json({ success: false, message: 'Không có quyền cập nhật booking này' });
+      }
+
+      await executeQuery(
+        `UPDATE Bookings SET base_price = @param1 WHERE booking_id = @param2`,
+        [Number(price), bookingId]
+      );
+      return res.json({ success: true, bookingId, final_price: Number(price) });
+    } catch (error) {
+      console.error('❌ Error updating booking final price:', error);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = {
@@ -276,4 +370,6 @@ module.exports = {
   canRateTasker: BookingController.canRateTasker,
   listMyBookings: BookingController.listMyBookings,
   getBookingById: BookingController.getBookingById,
+  getBookingDetails: BookingController.getBookingDetails,
+  updateFinalPrice: BookingController.updateFinalPrice,
 };
