@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const VideoController = require('../controllers/VideoController');
-const { authenticateToken, requireTasker, requireStaff } = require('../middleware/auth');
+
+const { authenticateToken, requireTasker, requireStaff} = require('../middleware/auth');
 const { videoUpload } = require('../config/cloudinary');
 router.get('/pending', authenticateToken, requireStaff, VideoController.getPendingVideos);
 router.post(
@@ -28,7 +29,7 @@ router.put('/comments/:comment_id', authenticateToken, VideoController.updateVid
 router.delete('/comments/:comment_id', authenticateToken, VideoController.deleteVideoComment);
 router.get('/:videoId/comments', VideoController.getVideoComments);
 router.get('/:videoId/comments/tree', VideoController.getVideoCommentTree);
-router.delete('/:videoId', authMiddleware(['Staff', 'Admin']), VideoController.deleteVideoByStaff);
+// router.delete('/:videoId', authMiddleware(['Staff', 'Admin']), VideoController.deleteVideoByStaff);
 router.put('/:videoId/status', authenticateToken, requireStaff, VideoController.updateVideoStatus);
 
 module.exports = router;

@@ -1,3 +1,17 @@
+// Check if certificate code exists anywhere in the system
+exports.checkCertificateCodeExists = async (req, res) => {
+  try {
+    const code = (req.query.code || '').toString().trim();
+    if (!code) return res.status(400).json({ success: false, message: 'Thiếu mã chứng chỉ' });
+    const query = `SELECT cert_id FROM TaskerCertifications WHERE parsed_certificate_code = @param1`;
+    const result = await executeQuery(query, [code]);
+    const exists = (result.recordset && result.recordset.length > 0);
+    res.json({ success: true, exists });
+  } catch (error) {
+    console.error('checkCertificateCodeExists error:', error);
+    res.status(500).json({ success: false, message: 'Lỗi kiểm tra mã chứng chỉ', error: error.message });
+  }
+};
 // module.exports = TaskerController;
 const Address = require("../models/Address");
 const axios = require("axios");
@@ -7,6 +21,18 @@ const { executeQuery } = require("../config/database");
 const { cloudinary, certificateUpload } = require('../config/cloudinary');
 const { extractCertificateFromUrl } = require('../config/gemini.service');
 const TaskerApplication = require('../models/TaskerApplication');
+// Get all approved certificate codes
+exports.getApprovedCertificateCodes = async (req, res) => {
+  try {
+    const query = `SELECT parsed_certificate_code FROM TaskerCertifications WHERE status = 'Approved' AND parsed_certificate_code IS NOT NULL AND parsed_certificate_code <> ''`;
+    const result = await executeQuery(query, []);
+    const codes = (result.recordset || []).map(r => String(r.parsed_certificate_code).trim());
+    res.json({ success: true, codes: Array.from(new Set(codes)) });
+  } catch (error) {
+    console.error('getApprovedCertificateCodes error:', error);
+    res.status(500).json({ success: false, message: 'Lỗi lấy mã chứng chỉ đã duyệt', error: error.message });
+  }
+};
 
 // Lazy require classifyService when needed to avoid circular or load cost
 function getClassifyService() {

@@ -145,7 +145,7 @@ async function processReview(comment, rating) {
 }
 
 module.exports = { moderateContent, processReview };
-module.exports = { moderateContent };
+// module.exports = { moderateContent };
 
 // -------- Certificate Extraction (multimodal) --------
 const axios2 = axios; // reuse
