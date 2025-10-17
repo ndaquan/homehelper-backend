@@ -31,6 +31,11 @@ router.get('/certifications/signed-url', authenticateToken, requireAuth, taskerC
 router.post('/certifications', authenticateToken, requireAuth, taskerController.createCertification);
 router.post('/upgrade', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.upgradeToTasker);
 
+// API endpoint: Check if certificate code exists anywhere in the system
+router.get('/certifications/check-code', authenticateToken, taskerController.checkCertificateCodeExists);
+// API endpoint: Get all approved certificate codes
+router.get('/certifications/approved-codes', authenticateToken, taskerController.getApprovedCertificateCodes);
+
 // Application video upload (customer preparing upgrade, so only auth required, not tasker)
 router.post('/application/video-upload', authenticateToken, requireAuth, (videoUpload ? videoUpload.single('video') : memoryUpload.single('video')), taskerController.uploadApplicationVideo);
 // Staff application moderation
