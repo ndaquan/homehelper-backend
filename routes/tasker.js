@@ -13,6 +13,9 @@ router.post('/address', authenticateToken, requireAuth, taskerController.createA
 router.get('/address', authenticateToken, requireAuth, taskerController.getAddressesByUserId);
 router.put('/address/:address_id', authenticateToken, requireAuth, taskerController.updateAddress);
 router.delete('/address/:address_id', authenticateToken, requireAuth, taskerController.deleteAddress);
+
+router.get("/:id/services", taskerController.getWithServices);
+
 router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
 

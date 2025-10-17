@@ -511,6 +511,114 @@ exports.searchNearbyUsers = async (req, res) => {
     });
   }
 };
+
+exports.getWithServices = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Tìm tasker theo ID
+    const tasker = await Tasker.findById(id);
+    if (!tasker) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy Tasker" });
+    }
+
+    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
+    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
+    const target = allTaskers.find((t) => t.tasker_id == id);
+
+    const variants = [];
+    if (target && target.services.length) {
+      target.services.forEach((service) => {
+        service.variants.forEach((v) =>
+          variants.push({
+            ...v,
+            service_id: service.service_id,
+            service_name: service.name,
+          })
+        );
+      });
+    }
+
+    // Trả kết quả JSON
+    res.json({
+      success: true,
+      tasker: {
+        tasker_id: tasker.user_id,
+        name: tasker.name,
+        email: tasker.email,
+        phone: tasker.phone,
+        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
+        rating: target?.rating || 0,
+        reviews: target?.reviewsCount || 0,
+      },
+      variants,
+    });
+  } catch (error) {
+    console.error("❌ Lỗi getWithServices:", error);
+    res.status(500).json({
+      success: false,
+      message: "Lỗi lấy Tasker kèm dịch vụ",
+      error: error.message,
+    });
+  }
+};
+
+// Lấy tasker theo id kèm danh sách service variants
+exports.getWithServices = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Tìm tasker theo ID
+    const tasker = await Tasker.findById(id);
+    if (!tasker) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy Tasker" });
+    }
+
+    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
+    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
+    const target = allTaskers.find((t) => t.tasker_id == id);
+
+    const variants = [];
+    if (target && target.services.length) {
+      target.services.forEach((service) => {
+        service.variants.forEach((v) =>
+          variants.push({
+            ...v,
+            service_id: service.service_id,
+            service_name: service.name,
+          })
+        );
+      });
+    }
+
+    // Trả kết quả JSON
+    res.json({
+      success: true,
+      tasker: {
+        tasker_id: tasker.user_id,
+        name: tasker.name,
+        email: tasker.email,
+        phone: tasker.phone,
+        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
+        rating: target?.rating || 0,
+        reviews: target?.reviewsCount || 0,
+      },
+      variants,
+    });
+  } catch (error) {
+    console.error("❌ Lỗi getWithServices:", error);
+    res.status(500).json({
+      success: false,
+      message: "Lỗi lấy Tasker kèm dịch vụ",
+      error: error.message,
+    });
+  }
+};
+
 // Lấy danh sách Tasker với khoảng cách từ user đăng nhập
 exports.getTaskersWithDistance = async (req, res) => {
   try {
@@ -1523,3 +1631,4 @@ exports.recheckApplicationCertifications = async (req, res) => {
     res.status(500).json({ success:false, message:'Lỗi re-check', error:e.message });
   }
 };
+

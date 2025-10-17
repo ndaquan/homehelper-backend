@@ -1,13 +1,22 @@
 const express = require("express");
 const router = express.Router();
 const { authenticateToken } = require("../middleware/auth");
+const bookingController = require("../controllers/bookingController");
 const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice } = require("../controllers/bookingController");
 
-// GET /api/bookings/:taskerId/can-rate
-router.get("/:taskerId/can-rate", authenticateToken, canRateTasker);
+// 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
+router.post("/", bookingController.createFromJobDescription);
 
-// GET /api/bookings/my - danh sách booking của user (khách hàng)
-router.get("/my", authenticateToken, listMyBookings);
+// 3️⃣ Tasker cập nhật trạng thái (Start / Reject / Complete)
+router.patch("/:id/status", bookingController.updateStatus);
+
+router.get("/:id", bookingController.getBookingDetail); 
+
+// 4️⃣ Khách hàng kiểm tra quyền đánh giá Tasker
+router.get("/:taskerId/can-rate", authenticateToken, bookingController.canRateTasker);
+
+// 5️⃣ Khách hàng xem danh sách Booking của mình
+router.get("/my", authenticateToken, bookingController.listMyBookings);
 
 // GET /api/bookings/:bookingId - chi tiết booking
 router.get('/:bookingId', authenticateToken, getBookingDetails);
