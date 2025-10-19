@@ -9,17 +9,19 @@ router.post("/", bookingController.createFromJobDescription);
 
 // 3️⃣ Tasker cập nhật trạng thái (Start / Reject / Complete)
 router.patch("/:id/status", bookingController.updateStatus);
+// 5️⃣ Khách hàng xem danh sách Booking của mình
+router.get("/mybookings", authenticateToken, bookingController.listMyBookings);
 
-router.get("/:id", bookingController.getBookingDetail); 
+// Adding authenticateToken to the booking detail route
+router.get("/:id", authenticateToken, bookingController.getBookingDetail); 
 
 // 4️⃣ Khách hàng kiểm tra quyền đánh giá Tasker
 router.get("/:taskerId/can-rate", authenticateToken, bookingController.canRateTasker);
 
-// 5️⃣ Khách hàng xem danh sách Booking của mình
-router.get("/my", authenticateToken, bookingController.listMyBookings);
+
 
 // GET /api/bookings/:bookingId - chi tiết booking
-router.get('/:bookingId', authenticateToken, getBookingDetails);
+// router.get('/:bookingId', authenticateToken, getBookingDetails); // Đã loại bỏ để tránh trùng lặp
 
 // PATCH /api/bookings/:bookingId/final-price
 router.patch('/:bookingId/final-price', authenticateToken, updateFinalPrice);
