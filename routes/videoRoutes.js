@@ -29,7 +29,7 @@ router.put('/comments/:comment_id', authenticateToken, VideoController.updateVid
 router.delete('/comments/:comment_id', authenticateToken, VideoController.deleteVideoComment);
 router.get('/:videoId/comments', VideoController.getVideoComments);
 router.get('/:videoId/comments/tree', VideoController.getVideoCommentTree);
-// router.delete('/:videoId', authMiddleware(['Staff', 'Admin']), VideoController.deleteVideoByStaff);
+router.delete('/:videoId', authMiddleware(['Staff', 'Admin']), VideoController.deleteVideoByStaff);
 router.put('/:videoId/status', authenticateToken, requireStaff, VideoController.updateVideoStatus);
 
 module.exports = router;

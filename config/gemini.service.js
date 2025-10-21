@@ -173,77 +173,148 @@ async function downloadToTemp(url) {
 }
 
 async function convertPdfFirstPageToPng(pdfPath) {
-  if (!pdf2imgAvailable) throw new Error('PDF to image converter not installed');
-  const pdfImage = new PDFImage(pdfPath, { convertOptions: { '-resize': '1500x1500' } });
+  if (!pdf2imgAvailable)
+    throw new Error("PDF to image converter not installed");
+  const pdfImage = new PDFImage(pdfPath, {
+    convertOptions: { "-resize": "1500x1500" },
+  });
   const imagePath = await pdfImage.convertPage(0);
   return imagePath;
 }
 
 function extractJSON(str) {
   // Attempt to isolate JSON block
-  const first = str.indexOf('{');
-  const last = str.lastIndexOf('}');
+  const first = str.indexOf("{");
+  const last = str.lastIndexOf("}");
   if (first !== -1 && last !== -1 && last > first) {
     const candidate = str.substring(first, last + 1);
-    try { return JSON.parse(candidate); } catch (_) { /* ignore */ }
+    try {
+      return JSON.parse(candidate);
+    } catch (_) {
+      /* ignore */
+    }
   }
-  try { return JSON.parse(str); } catch { return null; }
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeDate(raw) {
   if (!raw) return null;
   const monthMap = {
-    january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12,
-    jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12
+    january: 1,
+    february: 2,
+    march: 3,
+    april: 4,
+    may: 5,
+    june: 6,
+    july: 7,
+    august: 8,
+    september: 9,
+    october: 10,
+    november: 11,
+    december: 12,
+    jan: 1,
+    feb: 2,
+    mar: 3,
+    apr: 4,
+    jun: 6,
+    jul: 7,
+    aug: 8,
+    sep: 9,
+    oct: 10,
+    nov: 11,
+    dec: 12,
   };
   // Vietnamese month words mapping if model returns (hiếm)
   const viMonthMap = {
-    'tháng 1':1,'tháng 2':2,'tháng 3':3,'tháng 4':4,'tháng 5':5,'tháng 6':6,'tháng 7':7,'tháng 8':8,'tháng 9':9,'tháng 10':10,'tháng 11':11,'tháng 12':12
+    "tháng 1": 1,
+    "tháng 2": 2,
+    "tháng 3": 3,
+    "tháng 4": 4,
+    "tháng 5": 5,
+    "tháng 6": 6,
+    "tháng 7": 7,
+    "tháng 8": 8,
+    "tháng 9": 9,
+    "tháng 10": 10,
+    "tháng 11": 11,
+    "tháng 12": 12,
   };
   const cleaned = raw
-    .replace(/Ngày\s+/i,'')
-    .replace(/ngày\s+/i,'')
-    .replace(/tháng\s+/ig, m => m.toLowerCase())
-    .replace(/năm\s+/i,'');
-  const trials = [raw, cleaned, raw.replace(/\./g,' '), cleaned.replace(/\./g,' ')];
+    .replace(/Ngày\s+/i, "")
+    .replace(/ngày\s+/i, "")
+    .replace(/tháng\s+/gi, (m) => m.toLowerCase())
+    .replace(/năm\s+/i, "");
+  const trials = [
+    raw,
+    cleaned,
+    raw.replace(/\./g, " "),
+    cleaned.replace(/\./g, " "),
+  ];
   for (const t of trials) {
     // dd/mm/yyyy or dd-mm-yyyy
     const m1 = t.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/);
     if (m1) {
-      let [ , d, M, y ] = m1; if (y.length === 2) y = (parseInt(y,10) > 50 ? '19'+y : '20'+y); return `${y.padStart(4,'0')}-${M.padStart(2,'0')}-${d.padStart(2,'0')}`;
+      let [, d, M, y] = m1;
+      if (y.length === 2) y = parseInt(y, 10) > 50 ? "19" + y : "20" + y;
+      return `${y.padStart(4, "0")}-${M.padStart(2, "0")}-${d.padStart(
+        2,
+        "0"
+      )}`;
     }
     // dd Month yyyy (English)
-    const m2 = t.match(/\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+(\d{4})\b/i);
+    const m2 = t.match(
+      /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.?\s+(\d{4})\b/i
+    );
     if (m2) {
-      const d = m2[1]; const mon = monthMap[m2[2].toLowerCase()]; const y = m2[3];
-      if (mon) return `${y}-${String(mon).padStart(2,'0')}-${d.padStart(2,'0')}`;
+      const d = m2[1];
+      const mon = monthMap[m2[2].toLowerCase()];
+      const y = m2[3];
+      if (mon)
+        return `${y}-${String(mon).padStart(2, "0")}-${d.padStart(2, "0")}`;
     }
     // Vietnamese pattern: dd mm yyyy OR dd tháng X yyyy
     const m3 = t.match(/\b(\d{1,2})\s+(tháng\s+)?(\d{1,2})\s+(\d{4})\b/i);
     if (m3) {
-      const d = m3[1]; const M = m3[3]; const y = m3[4];
-      return `${y}-${String(M).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const d = m3[1];
+      const M = m3[3];
+      const y = m3[4];
+      return `${y}-${String(M).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     }
     // Pattern: dd (tháng X) năm yyyy
     const m4 = t.match(/\b(\d{1,2})\s+(tháng\s+\d{1,2})\s+năm\s+(\d{4})\b/i);
     if (m4) {
-      const d = m4[1]; const monPhrase = m4[2].toLowerCase(); const y = m4[3];
-      const mon = viMonthMap[monPhrase]; if (mon) return `${y}-${String(mon).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const d = m4[1];
+      const monPhrase = m4[2].toLowerCase();
+      const y = m4[3];
+      const mon = viMonthMap[monPhrase];
+      if (mon)
+        return `${y}-${String(mon).padStart(2, "0")}-${String(d).padStart(
+          2,
+          "0"
+        )}`;
     }
   }
   return null;
 }
 
 async function extractCertificateFromUrl(certUrl) {
-  if (!GEMINI_API_KEY) throw new Error('Missing Gemini API key');
+  if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
   const local = await downloadToTemp(certUrl);
   let imagePath = local;
   if (/\.pdf$/i.test(local)) {
-    try { imagePath = await convertPdfFirstPageToPng(local); } catch (e) { throw new Error('PDF convert failed: '+e.message); }
+    try {
+      imagePath = await convertPdfFirstPageToPng(local);
+    } catch (e) {
+      throw new Error("PDF convert failed: " + e.message);
+    }
   }
   const buffer = fs.readFileSync(imagePath);
-  const b64 = buffer.toString('base64');
-const prompt = `
+  const b64 = buffer.toString("base64");
+  const prompt = `
 Bạn là hệ thống TRÍCH XUẤT THÔNG TIN CHỨNG CHỈ song ngữ (Việt / Anh), có nhiệm vụ nhận diện, hiểu ngữ cảnh và chuẩn hoá dữ liệu chứng chỉ thành JSON chuẩn. 
 Phân tích hình ảnh hoặc văn bản của chứng chỉ và TRẢ VỀ DUY NHẤT MỘT JSON hợp lệ theo schema dưới đây (không thêm bình luận, không giải thích, không kèm markdown):
 
@@ -274,17 +345,33 @@ YÊU CẦU:
 
   const body = {
     contents: [
-      { role: 'user', parts: [ { inline_data: { mime_type: 'image/png', data: b64 } }, { text: prompt } ] }
-    ]
+      {
+        role: "user",
+        parts: [
+          { inline_data: { mime_type: "image/png", data: b64 } },
+          { text: prompt },
+        ],
+      },
+    ],
   };
-  const { data } = await axios2.post(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, body, { headers: { 'Content-Type':'application/json' } });
-  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const { data } = await axios2.post(
+    `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
+    body,
+    { headers: { "Content-Type": "application/json" } }
+  );
+  const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
   const json = extractJSON(raw) || {};
   let iso = json.issued_date_iso || normalizeDate(json.issued_date_raw);
   let dateLineTried = null;
   // Fallback: scan raw text if iso still null
   if (!iso && raw) {
-    dateLineTried = raw.split(/\n|\\n/).find(l => /(Ngày|ngày)/.test(l) || /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/.test(l));
+    dateLineTried = raw
+      .split(/\n|\\n/)
+      .find(
+        (l) =>
+          /(Ngày|ngày)/.test(l) ||
+          /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/.test(l)
+      );
     if (dateLineTried) {
       iso = normalizeDate(dateLineTried);
     }
@@ -299,7 +386,7 @@ YÊU CẦU:
     level_or_grade: json.level_or_grade || null,
     certificate_code: json.certificate_code || null,
     graduation_date_raw: json.graduation_date_raw || null,
-    confidence: typeof json.confidence === 'number' ? json.confidence : null
+    confidence: typeof json.confidence === "number" ? json.confidence : null,
   };
 
   // Heuristic fallback: try to extract level/grade if missing
@@ -311,40 +398,68 @@ YÊU CẦU:
         /giỏi|very\s+good|good\b/,
         /khá|fair\b|above\s+average/,
         /trung\s*bình|average/,
-        /đạt|pass(ed)?\b/
+        /đạt|pass(ed)?\b/,
       ];
-      const gradeLabels = ['Xuất sắc','Giỏi','Khá','Trung bình','Đạt'];
-      for (let gi=0; gi<gradePatterns.length; gi++) {
-        if (gradePatterns[gi].test(lower)) { parsed.level_or_grade = gradeLabels[gi]; break; }
+      const gradeLabels = ["Xuất sắc", "Giỏi", "Khá", "Trung bình", "Đạt"];
+      for (let gi = 0; gi < gradePatterns.length; gi++) {
+        if (gradePatterns[gi].test(lower)) {
+          parsed.level_or_grade = gradeLabels[gi];
+          break;
+        }
       }
     }
-  } catch(_) { /* ignore heuristic errors */ }
+  } catch (_) {
+    /* ignore heuristic errors */
+  }
 
   try {
     const genericPatterns = [
       /^chứng\s*chỉ\s*đào\s*tạo$/i,
       /^chứng\s*chỉ$/i,
-      /^certificate$/i
+      /^certificate$/i,
     ];
     const lowerRaw = raw.toLowerCase();
-    const programVi = /chăm\s*sóc\s*người\s*cao\s*tuổi/i.test(lowerRaw) ? 'Chăm sóc người cao tuổi' : null;
-    const programEn = /elderly\s*care/i.test(lowerRaw) ? 'Elderly Care' : null;
-    if (parsed.cert_name && genericPatterns.some(p=>p.test(parsed.cert_name.trim()))) {
+    const programVi = /chăm\s*sóc\s*người\s*cao\s*tuổi/i.test(lowerRaw)
+      ? "Chăm sóc người cao tuổi"
+      : null;
+    const programEn = /elderly\s*care/i.test(lowerRaw) ? "Elderly Care" : null;
+    if (
+      parsed.cert_name &&
+      genericPatterns.some((p) => p.test(parsed.cert_name.trim()))
+    ) {
       if (programVi) {
-        parsed.cert_name = `Chứng chỉ đào tạo – ${programVi}${programEn?` (${programEn})`:''}`;
+        parsed.cert_name = `Chứng chỉ đào tạo – ${programVi}${
+          programEn ? ` (${programEn})` : ""
+        }`;
       }
     }
-  } catch (_) { /* ignore heuristic errors */ }
+  } catch (_) {
+    /* ignore heuristic errors */
+  }
 
-  if (process.env.DEBUG_CERT_AI === '1') {
+  if (process.env.DEBUG_CERT_AI === "1") {
     try {
-      const logDir = path.join(__dirname, 'logs');
+      const logDir = path.join(__dirname, "logs");
       if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-      const logFile = path.join(logDir, 'certificate_extraction.log');
-      const logEntry = `\n[${new Date().toISOString()}]\nURL: ${certUrl}\nRAW(JSON?): ${raw.substring(0,2000)}\nissued_date_raw(JSON): ${json.issued_date_raw}\nHeuristic dateLine: ${dateLineTried}\nFinal ISO: ${parsed.issued_date_iso}\nParsed Name: ${parsed.cert_name}\n`; 
+      const logFile = path.join(logDir, "certificate_extraction.log");
+      const logEntry = `\n[${new Date().toISOString()}]\nURL: ${certUrl}\nRAW(JSON?): ${raw.substring(
+        0,
+        2000
+      )}\nissued_date_raw(JSON): ${
+        json.issued_date_raw
+      }\nHeuristic dateLine: ${dateLineTried}\nFinal ISO: ${
+        parsed.issued_date_iso
+      }\nParsed Name: ${parsed.cert_name}\n`;
       fs.appendFileSync(logFile, logEntry);
-      console.log('🧪 CERT_AI_LOG:', { certUrl, dateRaw: json.issued_date_raw, dateLineTried, finalISO: parsed.issued_date_iso });
-    } catch (e) { /* ignore logging errors */ }
+      console.log("🧪 CERT_AI_LOG:", {
+        certUrl,
+        dateRaw: json.issued_date_raw,
+        dateLineTried,
+        finalISO: parsed.issued_date_iso,
+      });
+    } catch (e) {
+      /* ignore logging errors */
+    }
   }
 
   return { rawText: raw, parsed };

@@ -57,5 +57,7 @@ router.get('/application/my-status', authenticateToken, requireAuth, taskerContr
 // 	return taskerController.getById(req, res, next);
 // });
 router.get("/:id", taskerController.getById);
+// API endpoint: Lấy danh sách Tasker với khoảng cách
+router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
 
 module.exports = router;
