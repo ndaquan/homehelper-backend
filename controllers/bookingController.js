@@ -6,6 +6,8 @@ class BookingController {
   // 1️⃣ Customer tạo Booking (từ JobDescription.js)
   // ============================================
   static async createFromJobDescription(req, res) {
+    console.log("📩 [DEBUG] Body nhận được từ FE:", req.body);
+
     try {
       const {
         customer_id,
@@ -16,8 +18,7 @@ class BookingController {
         end_time,
         location,
         expected_price,
-        job_description,
-        photos,
+        task
       } = req.body;
 
       // ✅ Query chuẩn: status mặc định = 'Chờ xử lý'
@@ -25,12 +26,12 @@ class BookingController {
         INSERT INTO Bookings (
           customer_id, tasker_id, service_id, variant_id,
           booking_time, start_time, end_time, location,
-          status, expected_price, job_description, photos
+          status, expected_price
         )
         VALUES (
           @customer_id, @tasker_id, @service_id, @variant_id,
           GETDATE(), @start_time, @end_time, @location,
-          N'Chờ xử lý', @expected_price, @job_description, @photos
+          N'Chờ xử lý', @expected_price
         );
 
         SELECT SCOPE_IDENTITY() AS booking_id;
@@ -46,8 +47,6 @@ class BookingController {
         end_time,
         location,
         expected_price,
-        job_description,
-        photos: JSON.stringify(photos || []),
       });
 
       // ✅ Lấy booking_id chính xác
@@ -58,7 +57,25 @@ class BookingController {
         return res.status(500).json({
           success: false,
           message: "Không lấy được booking_id sau khi tạo booking",
-        }); ``
+        });
+      }
+
+      console.log("✅ [Booking] booking_id =", bookingId);
+
+      if (task) {
+        const taskQuery = `
+          INSERT INTO Tasks (booking_id, description, checklist, photos, completed)
+          VALUES (@booking_id, @description, @checklist, @photos, 0);
+        `;
+
+        await executeQuery(taskQuery, {
+          booking_id: bookingId,
+          description: task.description || "",
+          checklist: task.checklist || "",
+          photos: JSON.stringify(task.photos || []),
+        });
+
+        console.log("🧾 [Task] Đã tạo Task cho booking_id:", bookingId);
       }
 
       res.status(201).json({
@@ -198,7 +215,7 @@ class BookingController {
           break;
         }
       }
-    // console.log("💬 canRate result:", { canRate, bookingId, alreadyRated });
+      // console.log("💬 canRate result:", { canRate, bookingId, alreadyRated });
 
       if (!canRate) {
         return res.json({
@@ -253,9 +270,8 @@ class BookingController {
         };
         const vn = vnMap[status] || null;
         if (vn) {
-          query += ` AND (b.status = @param${
-            params.length + 1
-          } OR b.status = @param${params.length + 2})`;
+          query += ` AND (b.status = @param${params.length + 1
+            } OR b.status = @param${params.length + 2})`;
           params.push(status, vn);
         } else {
           query += ` AND b.status = @param${params.length + 1}`;
