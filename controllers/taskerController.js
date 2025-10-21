@@ -36,7 +36,7 @@ exports.getApprovedCertificateCodes = async (req, res) => {
 
 // Lazy require classifyService when needed to avoid circular or load cost
 function getClassifyService() {
-  try { return require('../lib/classifyService').classifyService; } catch(_) { return null; }
+  try { return require('../lib/classifyService').classifyService; } catch (_) { return null; }
 }
 
 
@@ -144,7 +144,7 @@ exports.createAddress = async (req, res) => {
       const lowerDisplay = item.display.toLowerCase();
       const lowerName = item.name.toLowerCase();
       const lowerAddress = item.address.toLowerCase();
-      
+
       if (lowerName === lowerInput || lowerInput.includes(lowerName)) return true;
       if (lowerDisplay === lowerInput || lowerAddress === lowerInput) return true;
       return false;
@@ -170,7 +170,7 @@ exports.createAddress = async (req, res) => {
     const placeResponse = await axios.get('https://maps.vietmap.vn/api/place/v3', {
       params: {
         apikey: process.env.VIETMAP_APIKEY,
-refid: refId
+        refid: refId
       },
       timeout: 5000
     });
@@ -493,9 +493,9 @@ exports.searchNearbyUsers = async (req, res) => {
         const a =
           Math.sin(dLat / 2) * Math.sin(dLat / 2) +
           Math.cos(toRad(lat)) *
-            Math.cos(toRad(addr.lat)) *
-            Math.sin(dLng / 2) *
-            Math.sin(dLng / 2);
+          Math.cos(toRad(addr.lat)) *
+          Math.sin(dLng / 2) *
+          Math.sin(dLng / 2);
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         const distance = R * c * 1000; // Convert to meters
 
@@ -671,6 +671,60 @@ function toRad(degrees) {
   return (degrees * Math.PI) / 180;
 }
 
+// Lấy tasker theo id kèm danh sách service variants
+exports.getWithServices = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Tìm tasker theo ID
+    const tasker = await Tasker.findById(id);
+    if (!tasker) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy Tasker" });
+    }
+
+    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
+    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
+    const target = allTaskers.find((t) => t.tasker_id == id);
+
+    const variants = [];
+    if (target && target.services.length) {
+      target.services.forEach((service) => {
+        service.variants.forEach((v) =>
+          variants.push({
+            ...v,
+            service_id: service.service_id,
+            service_name: service.name,
+          })
+        );
+      });
+    }
+
+    // Trả kết quả JSON
+    res.json({
+      success: true,
+      tasker: {
+        tasker_id: tasker.user_id,
+        name: tasker.name,
+        email: tasker.email,
+        phone: tasker.phone,
+        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
+        rating: target?.rating || 0,
+        reviews: target?.reviewsCount || 0,
+      },
+      variants,
+    });
+  } catch (error) {
+    console.error("❌ Lỗi getWithServices:", error);
+    res.status(500).json({
+      success: false,
+      message: "Lỗi lấy Tasker kèm dịch vụ",
+      error: error.message,
+    });
+  }
+}
+
 // Nâng cấp customer -> tasker
 exports.upgradeToTasker = async (req, res) => {
   try {
@@ -679,10 +733,10 @@ exports.upgradeToTasker = async (req, res) => {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
     // Support both JSON and multipart form-data
-  let introduce = "";
-  let variant_ids = [];
-  let certifications = [];
-  let introduction_video = null; // optional video object
+    let introduce = "";
+    let variant_ids = [];
+    let certifications = [];
+    let introduction_video = null; // optional video object
     if (req.is('application/json')) {
       const { introduce: introIn = "", variant_ids: variantsIn = [], certifications: certsIn = [], introduction_video: introVideoIn = null } = req.body || {};
       introduce = introIn;
@@ -709,12 +763,12 @@ exports.upgradeToTasker = async (req, res) => {
       if (req.body.certifications) {
         try {
           const parsed = JSON.parse(req.body.certifications);
-            if (Array.isArray(parsed)) certifications = parsed;
+          if (Array.isArray(parsed)) certifications = parsed;
         } catch (_) { /* ignore parse error */ }
       }
       // Merge uploaded files (deprecated path for direct URLs) removed to avoid storing permanent URLs.
       if (req.body.introduction_video) {
-        try { const parsedVideo = JSON.parse(req.body.introduction_video); if (parsedVideo && parsedVideo.video_url) introduction_video = parsedVideo; } catch(_){ /* ignore */ }
+        try { const parsedVideo = JSON.parse(req.body.introduction_video); if (parsedVideo && parsedVideo.video_url) introduction_video = parsedVideo; } catch (_) { /* ignore */ }
       }
     }
 
@@ -759,7 +813,7 @@ exports.upgradeToTasker = async (req, res) => {
     // Simple TaskerApplications table check / create record (assuming table exists); if not, attempt create.
     try {
       await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
-    } catch(tableErr){ console.warn('⚠️ Could not ensure TaskerApplications table:', tableErr.message); }
+    } catch (tableErr) { console.warn('⚠️ Could not ensure TaskerApplications table:', tableErr.message); }
     // Prevent duplicate when there's already a Pending or Approved application
     const existingApp = await executeQuery("SELECT TOP 1 application_id, status FROM TaskerApplications WHERE user_id = @param1 AND status IN ('Pending','Approved') ORDER BY application_id DESC", [userId]);
     if (process.env.NODE_ENV !== 'production') {

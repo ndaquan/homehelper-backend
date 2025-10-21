@@ -145,32 +145,29 @@ async function processReview(comment, rating) {
 }
 
 module.exports = { moderateContent, processReview };
-// module.exports = { moderateContent };
 
 // -------- Certificate Extraction (multimodal) --------
 const axios2 = axios; // reuse
-const os = require("os");
-const { v4: uuidv4 } = require("uuid");
+const os = require('os');
+const { v4: uuidv4 } = require('uuid');
 let pdf2imgAvailable = false;
 let PDFImage;
 try {
-  PDFImage = require("pdf-image").PDFImage; // optional dependency
+  PDFImage = require('pdf-image').PDFImage; // optional dependency
   pdf2imgAvailable = true;
-} catch (_) {
-  /* optional */
-}
+} catch (_) { /* optional */ }
 
 async function downloadToTemp(url) {
-  const tempDir = path.join(os.tmpdir(), "homehelper_cert");
+  const tempDir = path.join(os.tmpdir(), 'homehelper_cert');
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-  const ext = path.extname(url).split("?")[0] || ".bin";
+  const ext = path.extname(url).split('?')[0] || '.bin';
   const filePath = path.join(tempDir, uuidv4() + ext);
   const writer = fs.createWriteStream(filePath);
-  const response = await axios2.get(url, { responseType: "stream" });
+  const response = await axios2.get(url, { responseType: 'stream' });
   await new Promise((resolve, reject) => {
     response.data.pipe(writer);
-    writer.on("finish", resolve);
-    writer.on("error", reject);
+    writer.on('finish', resolve);
+    writer.on('error', reject);
   });
   return filePath;
 }
