@@ -1,11 +1,11 @@
 const express = require("express");
 const router = express.Router();
-const { authenticateToken } = require("../middleware/auth");
+const { authenticateToken, requireCustomer, requireTasker } = require("../middleware/auth");
 const bookingController = require("../controllers/bookingController");
 const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice } = require("../controllers/bookingController");
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
-router.post("/", bookingController.createFromJobDescription);
+router.post("/", authenticateToken, requireCustomer, bookingController.createFromJobDescription);
 
 // 3️⃣ Tasker cập nhật trạng thái (Start / Reject / Complete)
 router.patch("/:id/status", bookingController.updateStatus);

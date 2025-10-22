@@ -16,6 +16,8 @@ router.delete('/address/:address_id', authenticateToken, requireAuth, taskerCont
 
 router.get("/:id/services", taskerController.getWithServices);
 
+// API endpoint: Lấy danh sách Tasker với khoảng cách
+router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
 router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
 
