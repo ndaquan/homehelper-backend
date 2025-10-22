@@ -346,7 +346,7 @@ static async findById(id) {
   async getServices() {
     const query = `
       SELECT ps.*, s.name as name, s.description,
-             v.specific_price, v.variant_name, v.price_min, v.price_max, v.unit
+             v.variant_name, v.price_min, v.price_max, v.unit
       FROM PostServices ps
       LEFT JOIN Services s ON ps.service_id = s.service_id
       LEFT JOIN ServiceVariants v ON ps.variant_id = v.variant_id
