@@ -22,6 +22,13 @@ router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
 
 // Certifications & Upgrade
+// API endpoint: Lấy danh sách variant_id đã đăng ký của tasker
+router.get('/:id/registered-variants', taskerController.getRegisteredVariantIds);
+// API endpoint: Lấy danh sách chứng chỉ đang pending cho staff duyệt
+
+router.post('/certifications/approve', authenticateToken, requireStaff, taskerController.approveCertificationAndRegisterService);
+router.post('/certifications/pending', authenticateToken, requireAuth, taskerController.createPendingCertification);
+router.get('/certifications/pending', authenticateToken, requireStaff, taskerController.getPendingCertifications);
 router.get('/certifications/ping', taskerController.pingCertifications);
 router.post('/certifications/_debug_upload_noauth', certUploadMiddleware.array('cert_files', 2), taskerController.debugUploadCertifications);
 router.post('/certifications/upload', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.uploadCertifications);
@@ -59,5 +66,5 @@ router.get('/application/my-status', authenticateToken, requireAuth, taskerContr
 router.get("/:id", taskerController.getById);
 // API endpoint: Lấy danh sách Tasker với khoảng cách
 router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
-
+router.get('/:taskerId/certifications', taskerController.getAllCertificationsOfTasker);
 module.exports = router;
