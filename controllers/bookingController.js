@@ -379,6 +379,73 @@ class BookingController {
       return res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }
+
+  // ============================================
+  // 6️⃣ Tasker xem danh sách bookings của mình
+  // ============================================
+  static async getTaskerBookings(req, res) {
+    try {
+      const taskerId = req.user.userId;
+      const { status = null, limit = 50 } = req.query;
+
+      let query = `
+        SELECT TOP ${parseInt(limit)}
+          b.booking_id,
+          b.customer_id,
+          b.tasker_id,
+          b.service_id,
+          b.variant_id,
+          b.booking_time,
+          b.start_time,
+          b.end_time,
+          b.location,
+          b.status,
+          b.expected_price,
+          b.base_price,
+          b.final_price,
+          u.name AS customer_name,
+          u.email AS customer_email,
+          u.phone AS customer_phone,
+          s.name AS service_name,
+          sv.variant_name,
+          t.description AS task_description,
+          t.checklist AS task_checklist
+        FROM Bookings b
+        LEFT JOIN Users u ON b.customer_id = u.user_id
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
+        LEFT JOIN Tasks t ON b.booking_id = t.booking_id
+        WHERE b.tasker_id = @param1
+      `;
+
+      const params = [taskerId];
+      if (status) {
+        const vnMap = {
+          Pending: "Chờ xử lý",
+          Accepted: "Đã chấp nhận", 
+          "In Progress": "Đang tiến hành",
+          Completed: "Hoàn thành",
+          Cancelled: "Hủy",
+        };
+        const vn = vnMap[status] || null;
+        if (vn) {
+          query += ` AND (b.status = @param${params.length + 1} OR b.status = @param${params.length + 2})`;
+          params.push(status, vn);
+        } else {
+          query += ` AND b.status = @param${params.length + 1}`;
+          params.push(status);
+        }
+      }
+
+      query += " ORDER BY ISNULL(b.start_time, b.booking_time) DESC";
+
+      const result = await executeQuery(query, params);
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (error) {
+      console.error("❌ Error getting tasker bookings:", error);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
 }
 
 module.exports = {
@@ -390,4 +457,5 @@ module.exports = {
   getBookingById: BookingController.getBookingById,
   getBookingDetails: BookingController.getBookingDetails,
   updateFinalPrice: BookingController.updateFinalPrice,
+  getTaskerBookings: BookingController.getTaskerBookings,
 };
