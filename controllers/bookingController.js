@@ -245,7 +245,7 @@ class BookingController {
   static async listMyBookings(req, res) {
     try {
       const userId = req.user.userId;
-      const { status = null, limit = 50 } = req.query;
+          const { status = null, limit = 50 } = req.query;
 
       let query = `
         SELECT TOP ${parseInt(limit)}
