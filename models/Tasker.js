@@ -4,10 +4,6 @@ class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
   static async findAll(search = "", serviceId = "") {
     try {
-      // Nếu không có search và không có serviceId thì trả về []
-      if (!search && !serviceId) {
-        return [];
-      }
 
       let query = `
       SELECT 

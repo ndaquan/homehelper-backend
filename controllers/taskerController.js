@@ -248,7 +248,7 @@ exports.updateAddress = async (req, res) => {
       console.warn(
         "⚠️ Không tìm thấy kết quả, cập nhật địa chỉ mà không có tọa độ"
       );
-      const updatedAddress = await Address.update(
+      const updatedAddress = await Address.update( 
         address_id,
         trimmedAddress,
         0,
@@ -538,112 +538,6 @@ exports.searchNearbyUsers = async (req, res) => {
   }
 };
 
-exports.getWithServices = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Tìm tasker theo ID
-    const tasker = await Tasker.findById(id);
-    if (!tasker) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Không tìm thấy Tasker" });
-    }
-
-    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
-    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
-    const target = allTaskers.find((t) => t.tasker_id == id);
-
-    const variants = [];
-    if (target && target.services.length) {
-      target.services.forEach((service) => {
-        service.variants.forEach((v) =>
-          variants.push({
-            ...v,
-            service_id: service.service_id,
-            service_name: service.name,
-          })
-        );
-      });
-    }
-
-    // Trả kết quả JSON
-    res.json({
-      success: true,
-      tasker: {
-        tasker_id: tasker.user_id,
-        name: tasker.name,
-        email: tasker.email,
-        phone: tasker.phone,
-        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
-        rating: target?.rating || 0,
-        reviews: target?.reviewsCount || 0,
-      },
-      variants,
-    });
-  } catch (error) {
-    console.error("❌ Lỗi getWithServices:", error);
-    res.status(500).json({
-      success: false,
-      message: "Lỗi lấy Tasker kèm dịch vụ",
-      error: error.message,
-    });
-  }
-};
-
-// Lấy tasker theo id kèm danh sách service variants
-exports.getWithServices = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Tìm tasker theo ID
-    const tasker = await Tasker.findById(id);
-    if (!tasker) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Không tìm thấy Tasker" });
-    }
-
-    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
-    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
-    const target = allTaskers.find((t) => t.tasker_id == id);
-
-    const variants = [];
-    if (target && target.services.length) {
-      target.services.forEach((service) => {
-        service.variants.forEach((v) =>
-          variants.push({
-            ...v,
-            service_id: service.service_id,
-            service_name: service.name,
-          })
-        );
-      });
-    }
-
-    // Trả kết quả JSON
-    res.json({
-      success: true,
-      tasker: {
-        tasker_id: tasker.user_id,
-        name: tasker.name,
-        email: tasker.email,
-        phone: tasker.phone,
-        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
-        rating: target?.rating || 0,
-        reviews: target?.reviewsCount || 0,
-      },
-      variants,
-    });
-  } catch (error) {
-    console.error("❌ Lỗi getWithServices:", error);
-    res.status(500).json({
-      success: false,
-      message: "Lỗi lấy Tasker kèm dịch vụ",
-      error: error.message,
-    });
-  }
-};
 
 // Lấy danh sách Tasker với khoảng cách từ user đăng nhập
 exports.getTaskersWithDistance = async (req, res) => {
@@ -675,55 +569,37 @@ function toRad(degrees) {
 exports.getWithServices = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log("🟡 [Controller] Nhận request id =", id);
 
-    // Tìm tasker theo ID
     const tasker = await Tasker.findById(id);
-    if (!tasker) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Không tìm thấy Tasker" });
-    }
+    console.log("🟢 [Controller] Tasker:", tasker);
 
-    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
-    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
+    const allTaskers = await Tasker.findAll("", "");
+    console.log("📋 [Controller] Tổng taskers:", allTaskers.length);
+
     const target = allTaskers.find((t) => t.tasker_id == id);
+    console.log("🎯 [Controller] Target tasker:", target);
 
     const variants = [];
-    if (target && target.services.length) {
+    if (target?.services?.length) {
       target.services.forEach((service) => {
-        service.variants.forEach((v) =>
+        service.variants.forEach((v) => {
           variants.push({
             ...v,
             service_id: service.service_id,
             service_name: service.name,
-          })
-        );
+          });
+        });
       });
     }
+    console.log("✅ [Controller] Tổng variants lấy được:", variants.length);
 
-    // Trả kết quả JSON
-    res.json({
-      success: true,
-      tasker: {
-        tasker_id: tasker.user_id,
-        name: tasker.name,
-        email: tasker.email,
-        phone: tasker.phone,
-        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
-        rating: target?.rating || 0,
-        reviews: target?.reviewsCount || 0,
-      },
-      variants,
-    });
+    res.json({ success: true, tasker, variants });
   } catch (error) {
-    console.error("❌ Lỗi getWithServices:", error);
-    res.status(500).json({
-      success: false,
-      message: "Lỗi lấy Tasker kèm dịch vụ",
-      error: error.message,
-    });
+    console.error("❌ [Controller] Lỗi:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
-}
+};
 
 // Nâng cấp customer -> tasker
 exports.upgradeToTasker = async (req, res) => {
