@@ -51,20 +51,55 @@ exports.getApprovedCertificateCodes = async (req, res) => {
 // Lazy require classifyService when needed to avoid circular or load cost
 const TaskerServiceVariants = require("../models/TaskerServiceVariants");
   // Lấy danh sách chứng chỉ đang pending cho staff duyệt
-  exports.getPendingCertifications = async (req, res) => {
-    try {
-      // Only staff can access
-      // You may want to check req.user.role === 'staff' here if needed
-  const query = `SELECT tc.cert_id as certification_id, tc.cert_public_id, tc.cert_name as certificate_name, tc.created_at as registered_at, u.name as tasker_name, tc.variant_ids_json, tc.tasker_id
-    FROM TaskerCertifications tc
-    JOIN Users u ON tc.tasker_id = u.user_id
-    WHERE tc.status = 'pending'`;
-      const result = await require('../config/database').executeQuery(query, []);
-      res.json(result.recordset || []);
-    } catch (e) {
-      res.status(500).json({ success: false, message: e.message });
-    }
-  };
+exports.getPendingCertifications = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+          tc.cert_id AS certification_id,
+          tc.cert_public_id,
+          tc.cert_name AS certificate_name,
+          tc.created_at AS registered_at,
+          tc.tasker_id,
+          u.name AS tasker_name,
+          tc.variant_ids_json,
+          s.service_id,
+          s.name AS service_name,
+          v.variant_id,
+          v.variant_name,
+          v.pricing_type,
+          v.price_min,
+          v.price_max,
+          v.unit
+      FROM TaskerCertifications tc
+      JOIN Users u 
+          ON tc.tasker_id = u.user_id
+      LEFT JOIN Services s 
+          ON tc.service_id = s.service_id
+      OUTER APPLY (
+          SELECT 
+              STRING_AGG(v2.variant_name, ', ') AS variant_name,
+              STRING_AGG(v2.pricing_type, ', ') AS pricing_type,
+              MIN(v2.price_min) AS price_min,
+              MAX(v2.price_max) AS price_max,
+              STRING_AGG(v2.unit, ', ') AS unit,
+              STRING_AGG(CONVERT(VARCHAR(10), v2.variant_id), ', ') AS variant_id
+          FROM OPENJSON(tc.variant_ids_json)
+               WITH (variant_id INT '$') AS jsonIds
+          LEFT JOIN ServiceVariants v2
+               ON v2.variant_id = jsonIds.variant_id
+      ) v
+      WHERE tc.status = 'pending'
+      ORDER BY tc.created_at DESC;
+    `;
+
+    const result = await require('../config/database').executeQuery(query, []);
+    res.json({ success: true, data: result.recordset || [] });
+  } catch (e) {
+    console.error('[getPendingCertifications] error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // Tạo bản ghi TaskerCertifications với status pending, đồng bộ trường với FE
 exports.createPendingCertification = async (req, res) => {
   try {
@@ -1561,8 +1596,19 @@ exports.createCertification = async (req, res) => {
             const norm = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
             const serviceTokens = norm(serviceName).split(' ').filter(Boolean);
             const synonyms = {
-              'dieu hoa': ['dieu hoa','may lanh','air','aircon','airconditioner','hvac','lanh'],
-              'cham soc nguoi cao tuoi': ['cham soc nguoi cao tuoi','nguoi cao tuoi','elderly care','elderly','old people','cham soc','cham soc nguoi gia','nguoi gia']
+              'dieu hoa': [
+                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh'
+              ],
+              'cham soc nguoi cao tuoi': [
+                'cham soc nguoi cao tuoi', 'nguoi cao tuoi', 'elderly care', 'elderly',
+                'old people', 'cham soc', 'cham soc nguoi gia', 'nguoi gia'
+              ],
+              'nau an': [
+                'nau an', 'nau mon', 'lam mon an', 'am thuc', 'hoc nau an', 'day nau an',
+                'khoa hoc nau an', 'lop hoc nau an', 'mon an', 'mon ngon', 'chef', 'cook',
+                'cooking', 'culinary', 'culinary arts', 'cooking class', 'cooking course',
+                'food preparation', 'recipe', 'dish', 'cuisine', 'baking', 'pastry'
+              ]
             };
             let expandedServiceTokens = new Set(serviceTokens);
             for (const key in synonyms) {
@@ -1888,6 +1934,27 @@ exports.getAllCertificationsOfTasker = async (req, res) => {
       success: false,
       message: e.message
     });
+  }
+};
+
+// Staff reject certifications
+exports.rejectCertifications = async (req, res) => {
+  try {
+    const { cert_ids, variant_ids, tasker_id } = req.body;
+    if (!Array.isArray(cert_ids) || !tasker_id) {
+      return res.status(400).json({ success: false, message: 'Missing cert_ids or tasker_id' });
+    }
+    // Update status to 'rejected' for the given cert_public_id(s)
+    for (const cert_public_id of cert_ids) {
+      await executeQuery(
+        `UPDATE TaskerCertifications SET status = 'rejected' WHERE cert_public_id = @param1 AND tasker_id = @param2`,
+        [cert_public_id, tasker_id]
+      );
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Reject certifications error:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 

@@ -27,6 +27,7 @@ router.get('/:id/registered-variants', taskerController.getRegisteredVariantIds)
 // API endpoint: Lấy danh sách chứng chỉ đang pending cho staff duyệt
 
 router.post('/certifications/approve', authenticateToken, requireStaff, taskerController.approveCertificationAndRegisterService);
+router.post('/certifications/reject', authenticateToken, requireStaff, taskerController.rejectCertifications);
 router.post('/certifications/pending', authenticateToken, requireAuth, taskerController.createPendingCertification);
 router.get('/certifications/pending', authenticateToken, requireStaff, taskerController.getPendingCertifications);
 router.get('/certifications/ping', taskerController.pingCertifications);
