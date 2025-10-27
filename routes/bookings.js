@@ -18,8 +18,8 @@ router.get("/:id", authenticateToken, bookingController.getBookingDetail);
 // 4️⃣ Khách hàng kiểm tra quyền đánh giá Tasker
 router.get("/:taskerId/can-rate", authenticateToken, bookingController.canRateTasker);
 
-// GET /api/bookings/:bookingId - chi tiết booking
-router.get('/:bookingId', authenticateToken, getBookingDetails);
+// // GET /api/bookings/:bookingId - chi tiết booking
+// router.get('/:bookingId', authenticateToken, getBookingDetails);
 
 // PATCH /api/bookings/:bookingId/final-price
 router.patch('/:bookingId/final-price', authenticateToken, updateFinalPrice);

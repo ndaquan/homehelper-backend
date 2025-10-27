@@ -142,13 +142,16 @@ class BookingController {
           s.name AS service_name,
           v.variant_name, v.pricing_type, v.unit, v.price_min, v.price_max,
           uc.name AS customer_name, uc.email AS customer_email, uc.phone AS customer_phone,
-          ut.name AS tasker_name, ut.email AS tasker_email, ut.phone AS tasker_phone
+          ut.name AS tasker_name, ut.email AS tasker_email, ut.phone AS tasker_phone,
+          tk.description AS task_description,
+          tk.checklist AS task_checklist
         FROM Bookings b
         LEFT JOIN Taskers t ON b.tasker_id = t.tasker_id
         LEFT JOIN Services s ON b.service_id = s.service_id
         LEFT JOIN ServiceVariants v ON b.variant_id = v.variant_id
         LEFT JOIN Users uc ON b.customer_id = uc.user_id
         LEFT JOIN Users ut ON b.tasker_id = ut.user_id
+        LEFT JOIN Tasks tk ON b.booking_id = tk.booking_id 
         WHERE b.booking_id = @bookingId;
       `;
 
