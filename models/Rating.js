@@ -3,48 +3,63 @@ const { executeQuery } = require("../config/database");
 const { processReview } = require("../config/gemini.service"); // đường dẫn đúng tới file moderation.js
 
 class Rating {
-  static async getByTaskerId(taskerId) {
+  static async getByTaskerId(taskerId, currentUserId = null) {
     const query = `
     SELECT 
       r.rating_id,
       u.name AS reviewer_name,
       r.rating,
+      r.reviewee_id,
       r.comment AS text,
       r.created_at AS date,
-      s.name AS service_name
+      r.staff_reply,
+      r.staff_reply_date,
+      r.helpful,   
+      s.name AS service_name,
+      CASE WHEN rh.user_id IS NOT NULL THEN 1 ELSE 0 END AS userLiked
     FROM Ratings r
     JOIN Users u ON r.reviewer_id = u.user_id
     JOIN Bookings b ON r.booking_id = b.booking_id
     JOIN Services s ON b.service_id = s.service_id
+    LEFT JOIN RatingHelpful rh
+      ON r.rating_id = rh.rating_id AND rh.user_id = @param2
     WHERE r.reviewee_id = @param1
-    AND r.status = 1   --  Chỉ lấy các đánh giá đã duyệt
+      AND r.status = 1
     ORDER BY r.created_at DESC
   `;
 
-    const result = await executeQuery(query, [taskerId]);
+    const result = await executeQuery(query, [taskerId, currentUserId]);
     const rows = result?.recordset || [];
 
-    const reviews = rows.map((r) => ({
-      id: r.rating_id,
-      name: r.reviewer_name || "Ẩn danh",
-      rating: r.rating || 0,
-      text: r.text || "",
-      date: r.date,
-    }));
-
-    const total = reviews.length;
-    const ratingsCount = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
-    reviews.forEach((r) => {
-      ratingsCount[r.rating] = (ratingsCount[r.rating] || 0) + 1;
-    });
-
-    const average = total
-      ? Number(
-          (reviews.reduce((sum, r) => sum + r.rating, 0) / total).toFixed(1)
-        )
-      : 0;
-
-    return { reviews, average, total, ratingsCount };
+    return {
+      reviews: rows.map((r) => ({
+        id: r.rating_id,
+        name: r.reviewer_name || "Ẩn danh",
+        reviewee_id: r.reviewee_id,
+        rating: r.rating || 0,
+        text: r.text || "",
+        date: r.date,
+        staff_reply: r.staff_reply || null,
+        staff_reply_date: r.staff_reply_date || null,
+        helpful: r.helpful || 0,
+        userLiked: r.userLiked === 1,
+      })),
+      total: rows.length,
+      average: rows.length
+        ? Number(
+            (rows.reduce((sum, r) => sum + r.rating, 0) / rows.length).toFixed(
+              1
+            )
+          )
+        : 0,
+      ratingsCount: rows.reduce(
+        (acc, r) => {
+          acc[r.rating] = (acc[r.rating] || 0) + 1;
+          return acc;
+        },
+        { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
+      ),
+    };
   }
 
   static async create({
@@ -144,45 +159,106 @@ class Rating {
     const result = await executeQuery(query);
     return { ratings: result?.recordset || [] };
   }
-  static async approve(id) {
-    // Cập nhật trạng thái rating sang 1 (đã duyệt)
-    await executeQuery(
-      `UPDATE Ratings SET status = 1 WHERE rating_id = @param1`,
-      [id]
-    );
+  static async reply(rating_id, reply, user_id) {
+    const query = `
+    UPDATE Ratings 
+    SET staff_reply = @param1,
+        staff_reply_date = GETDATE()
+    WHERE rating_id = @param2
+  `;
+    const result = await executeQuery(query, [reply, rating_id]);
+    return result;
+  }
 
-    // Cập nhật lại điểm trung bình cho tasker
-    await executeQuery(
-      `
-      UPDATE Taskers
-      SET rating = (
-        SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
-        FROM Ratings
-        WHERE reviewee_id = (
-          SELECT reviewee_id FROM Ratings WHERE rating_id = @param1
-        )
-        AND status = 1
-      )
-      WHERE tasker_id = (
-        SELECT reviewee_id FROM Ratings WHERE rating_id = @param1
-      )
-    `,
-      [id]
-    );
+  static async toggleHelpful(ratingId, userId) {
+    try {
+      // Lấy lượt hữu ích hiện tại
+      const reviewResult = await executeQuery(
+        "SELECT helpful FROM Ratings WHERE rating_id = @param1",
+        [ratingId]
+      );
+
+      if (reviewResult.recordset.length === 0)
+        throw new Error("Đánh giá không tồn tại.");
+
+      const { helpful } = reviewResult.recordset[0];
+
+      // Kiểm tra xem user đã bấm chưa
+      const check = await executeQuery(
+        "SELECT * FROM RatingHelpful WHERE rating_id = @param1 AND user_id = @param2",
+        [ratingId, userId]
+      );
+
+      let newHelpful;
+
+      if (check.recordset.length > 0) {
+        // Huỷ lượt bấm
+        await executeQuery(
+          "DELETE FROM RatingHelpful WHERE rating_id = @param1 AND user_id = @param2",
+          [ratingId, userId]
+        );
+        newHelpful = Math.max(0, helpful - 1);
+      } else {
+        // Thêm lượt bấm
+        await executeQuery(
+          "INSERT INTO RatingHelpful (rating_id, user_id) VALUES (@param1, @param2)",
+          [ratingId, userId]
+        );
+        newHelpful = helpful + 1;
+      }
+
+      // Cập nhật số hữu ích trong Ratings
+      await executeQuery(
+        "UPDATE Ratings SET helpful = @param2 WHERE rating_id = @param1",
+        [ratingId, newHelpful]
+      );
+
+      return { liked: check.recordset.length === 0, helpful: newHelpful };
+    } catch (error) {
+      console.error("❌ RatingModel.toggleHelpful error:", error);
+      throw error;
+    }
   }
-  static async reject(id) {
-    const result = await executeQuery(
-      `UPDATE Ratings SET status = 2 WHERE rating_id = @param1`,
-      [parseInt(id)]
-    );
-    console.log("Reject rating:", id, "Rows affected:", result.rowsAffected);
-    const check = await executeQuery(
-      `SELECT rating_id, status FROM Ratings WHERE rating_id = @param1`,
-      [parseInt(id)]
-    );
-    console.log("Status sau reject:", check.recordset[0]);
-    return check.recordset[0];
-  }
+
+  // static async approve(id) {
+  //   // Cập nhật trạng thái rating sang 1 (đã duyệt)
+  //   await executeQuery(
+  //     `UPDATE Ratings SET status = 1 WHERE rating_id = @param1`,
+  //     [id]
+  //   );
+
+  //   // Cập nhật lại điểm trung bình cho tasker
+  //   await executeQuery(
+  //     `
+  //     UPDATE Taskers
+  //     SET rating = (
+  //       SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
+  //       FROM Ratings
+  //       WHERE reviewee_id = (
+  //         SELECT reviewee_id FROM Ratings WHERE rating_id = @param1
+  //       )
+  //       AND status = 1
+  //     )
+  //     WHERE tasker_id = (
+  //       SELECT reviewee_id FROM Ratings WHERE rating_id = @param1
+  //     )
+  //   `,
+  //     [id]
+  //   );
+  // }
+  // static async reject(id) {
+  //   const result = await executeQuery(
+  //     `UPDATE Ratings SET status = 2 WHERE rating_id = @param1`,
+  //     [parseInt(id)]
+  //   );
+  //   console.log("Reject rating:", id, "Rows affected:", result.rowsAffected);
+  //   const check = await executeQuery(
+  //     `SELECT rating_id, status FROM Ratings WHERE rating_id = @param1`,
+  //     [parseInt(id)]
+  //   );
+  //   console.log("Status sau reject:", check.recordset[0]);
+  //   return check.recordset[0];
+  // }
 }
 
 module.exports = Rating;
