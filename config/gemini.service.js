@@ -108,14 +108,12 @@ async function processReview(comment, rating) {
 
     let result;
     if (!isConsistent) {
-      // 2️⃣ Bình luận & rating trái ngược → chờ duyệt
       result = {
         allow: true,
-        status: 0,
-        message: "Bình luận và rating không khớp, chuyển vào hàng chờ xử lý.",
+        status: 1, // ✅ đăng luôn, không cần staff duyệt
+        message: "Bình luận và rating không khớp, nhưng vẫn được đăng.",
       };
     } else {
-      // 3️⃣ Bình thường → duyệt ngay
       result = {
         allow: true,
         status: 1,
@@ -144,30 +142,30 @@ async function processReview(comment, rating) {
   }
 }
 
-module.exports = { moderateContent, processReview };
-
 // -------- Certificate Extraction (multimodal) --------
 const axios2 = axios; // reuse
-const os = require('os');
-const { v4: uuidv4 } = require('uuid');
+const os = require("os");
+const { v4: uuidv4 } = require("uuid");
 let pdf2imgAvailable = false;
 let PDFImage;
 try {
-  PDFImage = require('pdf-image').PDFImage; // optional dependency
+  PDFImage = require("pdf-image").PDFImage; // optional dependency
   pdf2imgAvailable = true;
-} catch (_) { /* optional */ }
+} catch (_) {
+  /* optional */
+}
 
 async function downloadToTemp(url) {
-  const tempDir = path.join(os.tmpdir(), 'homehelper_cert');
+  const tempDir = path.join(os.tmpdir(), "homehelper_cert");
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
-  const ext = path.extname(url).split('?')[0] || '.bin';
+  const ext = path.extname(url).split("?")[0] || ".bin";
   const filePath = path.join(tempDir, uuidv4() + ext);
   const writer = fs.createWriteStream(filePath);
-  const response = await axios2.get(url, { responseType: 'stream' });
+  const response = await axios2.get(url, { responseType: "stream" });
   await new Promise((resolve, reject) => {
     response.data.pipe(writer);
-    writer.on('finish', resolve);
-    writer.on('error', reject);
+    writer.on("finish", resolve);
+    writer.on("error", reject);
   });
   return filePath;
 }
@@ -465,4 +463,8 @@ YÊU CẦU:
   return { rawText: raw, parsed };
 }
 
-module.exports.extractCertificateFromUrl = extractCertificateFromUrl;
+module.exports = {
+  moderateContent,
+  processReview,
+  extractCertificateFromUrl,
+};
