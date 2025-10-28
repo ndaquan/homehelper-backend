@@ -16,79 +16,41 @@ const {
 const certUploadMiddleware = certificateUpload || memoryUpload;
 
 // Core Tasker CRUD / retrieval
-router.post("/search-nearby", taskerController.searchNearbyUsers);
-router.post(
-  "/address",
-  authenticateToken,
-  requireAuth,
-  taskerController.createAddress
-);
-router.get(
-  "/address",
-  authenticateToken,
-  requireAuth,
-  taskerController.getAddressesByUserId
-);
-router.put(
-  "/address/:address_id",
-  authenticateToken,
-  requireAuth,
-  taskerController.updateAddress
-);
-router.delete(
-  "/address/:address_id",
-  authenticateToken,
-  requireAuth,
-  taskerController.deleteAddress
-);
-router.get("/by-variant/:variantId", taskerController.getByVariant);
-router.get("/", taskerController.getAll);
+router.post('/search-nearby', taskerController.searchNearbyUsers);
+router.post('/address', authenticateToken, requireAuth, taskerController.createAddress);
+router.get('/address', authenticateToken, requireAuth, taskerController.getAddressesByUserId);
+router.put('/address/:address_id', authenticateToken, requireAuth, taskerController.updateAddress);
+router.delete('/address/:address_id', authenticateToken, requireAuth, taskerController.deleteAddress);
+
+router.get("/:id/services", taskerController.getWithServices);
+
+// API endpoint: Lấy danh sách Tasker với khoảng cách
+router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
+router.get('/by-variant/:variantId', taskerController.getByVariant);
+router.get('/', taskerController.getAll);
 
 // Certifications & Upgrade
-router.get("/certifications/ping", taskerController.pingCertifications);
-router.post(
-  "/certifications/_debug_upload_noauth",
-  certUploadMiddleware.array("cert_files", 2),
-  taskerController.debugUploadCertifications
-);
-router.post(
-  "/certifications/upload",
-  authenticateToken,
-  requireAuth,
-  certUploadMiddleware.array("cert_files", 5),
-  taskerController.uploadCertifications
-);
-router.post(
-  "/certifications/:cert_id/extract-ai",
-  authenticateToken,
-  requireAuth,
-  taskerController.extractAICertification
-);
-router.get(
-  "/certifications/:cert_id/signed-url",
-  authenticateToken,
-  requireAuth,
-  taskerController.getSignedCertificateUrl
-);
-router.get(
-  "/certifications/signed-url",
-  authenticateToken,
-  requireAuth,
-  taskerController.getSignedCertificateUrlByPublicId
-);
-router.post(
-  "/certifications",
-  authenticateToken,
-  requireAuth,
-  taskerController.createCertification
-);
-router.post(
-  "/upgrade",
-  authenticateToken,
-  requireAuth,
-  certUploadMiddleware.array("cert_files", 5),
-  taskerController.upgradeToTasker
-);
+// API endpoint: Lấy danh sách variant_id đã đăng ký của tasker
+router.get('/:id/registered-variants', taskerController.getRegisteredVariantIds);
+// API endpoint: Lấy danh sách chứng chỉ đang pending cho staff duyệt
+
+router.post('/certifications/approve', authenticateToken, requireStaff, taskerController.approveCertificationAndRegisterService);
+router.post('/certifications/reject', authenticateToken, requireStaff, taskerController.rejectCertifications);
+router.post('/certifications/pending', authenticateToken, requireAuth, taskerController.createPendingCertification);
+router.get('/certifications/pending', authenticateToken, requireStaff, taskerController.getPendingCertifications);
+router.get('/certifications/ping', taskerController.pingCertifications);
+router.post('/certifications/_debug_upload_noauth', certUploadMiddleware.array('cert_files', 2), taskerController.debugUploadCertifications);
+router.post('/certifications/upload', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.uploadCertifications);
+router.post('/certifications/:cert_id/extract-ai', authenticateToken, requireAuth, taskerController.extractAICertification);
+router.get('/certifications/:cert_id/signed-url', authenticateToken, requireAuth, taskerController.getSignedCertificateUrl);
+router.get('/certifications/signed-url', authenticateToken, requireAuth, taskerController.getSignedCertificateUrlByPublicId);
+router.post('/certifications', authenticateToken, requireAuth, taskerController.createCertification);
+router.post('/upgrade', authenticateToken, requireAuth, certUploadMiddleware.array('cert_files', 5), taskerController.upgradeToTasker);
+
+// API endpoint: Check if certificate code exists anywhere in the system
+router.get('/certifications/check-code', authenticateToken, taskerController.checkCertificateCodeExists);
+// API endpoint: Get all approved certificate codes
+router.get('/certifications/approved-codes', authenticateToken, taskerController.getApprovedCertificateCodes);
 
 // Application video upload (customer preparing upgrade, so only auth required, not tasker)
 router.post(
@@ -147,5 +109,7 @@ router.get(
 // 	return taskerController.getById(req, res, next);
 // });
 router.get("/:id", taskerController.getById);
-
+// API endpoint: Lấy danh sách Tasker với khoảng cách
+router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
+router.get('/:taskerId/certifications', taskerController.getAllCertificationsOfTasker);
 module.exports = router;

@@ -1,6 +1,6 @@
 // models/Rating.js
 const { executeQuery } = require("../config/database");
-const { processReview } = require("../config/gemini.service"); // đường dẫn đúng tới file moderation.js
+const { processReview } = require("../config/gemini.service"); 
 
 class Rating {
   static async getByTaskerId(taskerId, currentUserId = null) {

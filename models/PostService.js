@@ -33,19 +33,7 @@ class PostService {
     } = postServiceData;
 
     let final_desired_price = desired_price;
-    if (final_desired_price == null && variant_id != null) {
-      // Lấy specific_price từ ServiceVariants
-      const priceQuery = 'SELECT specific_price FROM ServiceVariants WHERE variant_id = @param1';
-      try {
-        const priceResult = await executeQuery(priceQuery, [variant_id]);
-        if (priceResult.recordset && priceResult.recordset.length > 0) {
-          final_desired_price = priceResult.recordset[0].specific_price;
-        }
-      } catch (e) {
-        // Nếu lỗi vẫn cho phép tạo, desired_price sẽ là null
-        console.error('Không lấy được specific_price từ ServiceVariants:', e.message);
-      }
-    }
+    // ...existing code...
 
     try {
       // Detect whether post_service_id is an IDENTITY column
@@ -101,7 +89,7 @@ class PostService {
   static async findById(id) {
     const query = `
       SELECT ps.*, s.name as service_name, s.description,
-             v.variant_name, v.pricing_type, v.price_min, v.price_max, v.unit, v.specific_price
+             v.variant_name, v.pricing_type, v.price_min, v.price_max, v.unit
       FROM PostServices ps
       LEFT JOIN Services s ON ps.service_id = s.service_id
       LEFT JOIN ServiceVariants v ON ps.variant_id = v.variant_id
@@ -120,7 +108,7 @@ class PostService {
   static async findByPostId(postId) {
     const query = `
       SELECT ps.*, s.name as service_name, s.description,
-             v.variant_name, v.pricing_type, v.price_min, v.price_max, v.unit, v.specific_price
+             v.variant_name, v.pricing_type, v.price_min, v.price_max, v.unit
       FROM PostServices ps
       LEFT JOIN Services s ON ps.service_id = s.service_id
       LEFT JOIN ServiceVariants v ON ps.variant_id = v.variant_id
