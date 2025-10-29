@@ -462,13 +462,6 @@ YÊU CẦU:
 
   return { rawText: raw, parsed };
 }
-
-module.exports = {
-  moderateContent,
-  processReview,
-  extractCertificateFromUrl,
-};
-
 async function moderateVideoText(title, description = "") {
   if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
 
@@ -537,4 +530,11 @@ Mô tả: "${description}"`;
     return { isSafe: false, reason: "Lỗi kiểm duyệt AI" };
   }
 }
-module.exports = {moderateVideoText  };
+
+module.exports = {
+  moderateContent,
+  processReview,
+  extractCertificateFromUrl,
+  moderateVideoText
+};
+
