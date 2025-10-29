@@ -4,10 +4,6 @@ class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
   static async findAll(search = "", serviceId = "") {
     try {
-      // Nếu không có search và không có serviceId thì trả về []
-      if (!search && !serviceId) {
-        return [];
-      }
 
       let query = `
       SELECT 
@@ -119,7 +115,7 @@ class Tasker {
       return false;
     }
   }
-  
+
   // Lấy danh sách tasker theo variant_id (liên kết qua TaskerServiceVariants)
   static async findByVariant(variantId) {
     try {
@@ -255,11 +251,11 @@ class Tasker {
 
       tasker.rating = tasker.reviews.length
         ? parseFloat(
-            (
-              tasker.reviews.reduce((sum, r) => sum + r.rating, 0) /
-              tasker.reviews.length
-            ).toFixed(1)
-          )
+          (
+            tasker.reviews.reduce((sum, r) => sum + r.rating, 0) /
+            tasker.reviews.length
+          ).toFixed(1)
+        )
         : 0;
 
       tasker.reviewCount = tasker.reviews.length;
@@ -269,7 +265,7 @@ class Tasker {
       throw new Error(`Lỗi lấy tasker với reviews: ${error.message}`);
     }
   }
-   static async getUserLocation(userId) {
+  static async getUserLocation(userId) {
     const result = await executeQuery(
       `SELECT TOP 1 lat, lng 
        FROM Addresses 
@@ -301,6 +297,64 @@ class Tasker {
       { userLat, userLng }
     );
     return result.recordset;
+  }
+
+  static async findByIdWithServices(taskerId) {
+    const query = `
+    SELECT 
+      t.tasker_id,
+      u.name,
+      u.email,
+      u.phone,
+      s.service_id,
+      s.name AS service_name,
+      sv.variant_id,
+      sv.variant_name,
+      sv.pricing_type,
+      sv.price_min,
+      sv.price_max,
+      sv.unit
+    FROM Taskers t
+    JOIN Users u ON t.tasker_id = u.user_id
+    LEFT JOIN TaskerServiceVariants tsv ON t.tasker_id = tsv.tasker_id
+    LEFT JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+    LEFT JOIN Services s ON sv.service_id = s.service_id
+    WHERE t.tasker_id = @param1
+  `;
+    const result = await executeQuery(query, [taskerId]);
+
+    if (!result.recordset.length) return null;
+
+    const servicesMap = new Map();
+
+    result.recordset.forEach((row) => {
+      if (!servicesMap.has(row.service_id)) {
+        servicesMap.set(row.service_id, {
+          service_id: row.service_id,
+          service_name: row.service_name,
+          variants: [],
+        });
+      }
+
+      if (row.variant_id) {
+        servicesMap.get(row.service_id).variants.push({
+          variant_id: row.variant_id,
+          variant_name: row.variant_name,
+          pricing_type: row.pricing_type,
+          price_min: row.price_min,
+          price_max: row.price_max,
+          unit: row.unit,
+        });
+      }
+    });
+
+    return {
+      tasker_id: result.recordset[0].tasker_id,
+      name: result.recordset[0].name,
+      email: result.recordset[0].email,
+      phone: result.recordset[0].phone,
+      services: Array.from(servicesMap.values()),
+    };
   }
 }
 

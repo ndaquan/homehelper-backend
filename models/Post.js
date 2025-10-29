@@ -1,4 +1,4 @@
-const { executeQuery, getPool, sql } = require('../config/database');
+const { executeQuery, getPool, sql } = require("../config/database");
 
 class Post {
   constructor(data) {
@@ -7,8 +7,8 @@ class Post {
     this.title = data.title;
     this.content = data.content;
     this.post_date = data.post_date;
-  // Status (English preferred): 'Pending' | 'Approved' | 'Rejected'
-  this.status = data.status || 'Pending';
+    // Status (English preferred): 'Pending' | 'Approved' | 'Rejected'
+    this.status = data.status || "";
     this.related_booking_id = data.related_booking_id || null;
     this.photo_urls = data.photo_urls;
     this.likes = data.likes || 0;
@@ -23,9 +23,9 @@ class Post {
       user_id,
       title,
       content,
-      status = 'Pending',
+      status = "Pending",
       photo_urls = null,
-      related_booking_id = null
+      related_booking_id = null,
     } = postData;
 
     const query = `
@@ -38,12 +38,17 @@ class Post {
     `;
 
     const photoUrlsJson = photo_urls ? JSON.stringify(photo_urls) : null;
-    
+
     try {
       const result = await executeQuery(query, [
-        user_id, title, content, status, related_booking_id, photoUrlsJson
+        user_id,
+        title,
+        content,
+        status,
+        related_booking_id,
+        photoUrlsJson,
       ]);
-      
+
       const postId = result.recordset[0].post_id;
       return await Post.findById(postId);
     } catch (error) {
@@ -51,29 +56,29 @@ class Post {
     }
   }
 
-// Tìm bài đăng theo ID
-static async findById(id) {
-  const query = `
+  // Tìm bài đăng theo ID
+  static async findById(id) {
+    const query = `
     SELECT p.*, u.name as author_name, u.email as author_email
     FROM Posts p
     LEFT JOIN Users u ON p.user_id = u.user_id
     WHERE p.post_id = @param1
   `;
-  try {
-    const result = await executeQuery(query, [id]);
-    if (!result.recordset || result.recordset.length === 0) return null;
-    
-    const row = result.recordset[0];
-    const post = new Post(row);
-    post.photo_urls = JSON.parse(post.photo_urls || '[]');
-    // Gán thông tin tác giả vào object trả về
-    post.author_name = row.author_name || 'Ẩn danh';
-    post.author_email = row.author_email || '';
-    return post;
-  } catch (error) {
-    throw new Error(`Error finding post: ${error.message}`);
+    try {
+      const result = await executeQuery(query, [id]);
+      if (!result.recordset || result.recordset.length === 0) return null;
+
+      const row = result.recordset[0];
+      const post = new Post(row);
+      post.photo_urls = JSON.parse(post.photo_urls || "[]");
+      // Gán thông tin tác giả vào object trả về
+      post.author_name = row.author_name || "Ẩn danh";
+      post.author_email = row.author_email || "";
+      return post;
+    } catch (error) {
+      throw new Error(`Error finding post: ${error.message}`);
+    }
   }
-}
 
   // Lấy danh sách bài đăng với phân trang
   static async findAll(options = {}) {
@@ -81,11 +86,11 @@ static async findById(id) {
       page = 1,
       limit = 10,
       // Default to approved posts; if caller passes '' or 'all', disable status filter
-      status = 'Approved',
-      search = '',
+      status = "Approved",
+      search = "",
       user_id = null,
-      sortBy = 'post_date',
-      sortOrder = 'DESC'
+      sortBy = "post_date",
+      sortOrder = "DESC",
     } = options;
 
     const offset = (page - 1) * limit;
@@ -109,39 +114,50 @@ static async findById(id) {
     const params = [];
 
     // Filter by status: if status is undefined use default 'Approved'; if empty string or 'all', skip filtering
-    const normalizedStatus = (status || '').toString().trim();
-    if (normalizedStatus && normalizedStatus.toLowerCase() !== 'all') {
+    const normalizedStatus = (status || "").toString().trim();
+    if (normalizedStatus && normalizedStatus.toLowerCase() !== "all") {
       // Support both English and legacy Vietnamese values for compatibility
       const vnMap = {
-        'Approved': 'Đã phê duyệt',
-        'Pending': 'Chờ xử lý',
-        'Rejected': 'Bị từ chối'
+        Approved: "Đã phê duyệt",
+        Pending: "Chờ xử lý",
+        Rejected: "Bị từ chối",
       };
       const vn = vnMap[normalizedStatus] || null;
       if (vn) {
-        query += ' AND (p.status = @param' + (params.length + 1) + ' OR p.status = @param' + (params.length + 2) + ')';
+        query +=
+          " AND (p.status = @param" +
+          (params.length + 1) +
+          " OR p.status = @param" +
+          (params.length + 2) +
+          ")";
         params.push(normalizedStatus, vn);
       } else {
-        query += ' AND p.status = @param' + (params.length + 1);
+        query += " AND p.status = @param" + (params.length + 1);
         params.push(normalizedStatus);
       }
     }
 
     // Search by title or content
     if (search) {
-      query += ' AND (p.title LIKE @param' + (params.length + 1) + ' OR p.content LIKE @param' + (params.length + 2) + ')';
+      query +=
+        " AND (p.title LIKE @param" +
+        (params.length + 1) +
+        " OR p.content LIKE @param" +
+        (params.length + 2) +
+        ")";
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm);
     }
 
     // Filter by user
     if (user_id) {
-      query += ' AND p.user_id = @param' + (params.length + 1);
+      query += " AND p.user_id = @param" + (params.length + 1);
       params.push(user_id);
     }
 
     // Group by post_id
-  query += ' GROUP BY p.post_id, p.title, p.content, p.post_date, p.status, p.photo_urls, p.related_booking_id, p.likes, p.comments_count, p.created_at, p.updated_at, p.user_id, u.name, u.email';
+    query +=
+      " GROUP BY p.post_id, p.title, p.content, p.post_date, p.status, p.photo_urls, p.related_booking_id, p.likes, p.comments_count, p.created_at, p.updated_at, p.user_id, u.name, u.email";
 
     // Sorting
     query += ` ORDER BY p.${sortBy} ${sortOrder}`;
@@ -149,44 +165,54 @@ static async findById(id) {
 
     try {
       const result = await executeQuery(query, params);
-      const posts = result.recordset.map(row => {
+      const posts = result.recordset.map((row) => {
         const post = new Post(row);
-        post.photo_urls = JSON.parse(post.photo_urls || '[]');
+        post.photo_urls = JSON.parse(post.photo_urls || "[]");
         post.likes = row.likes_count;
         post.comments_count = row.comments_count;
-        post.author_name = row.author_name || 'Ẩn danh';
-        post.author_email = row.author_email || '';
+        post.author_name = row.author_name || "Ẩn danh";
+        post.author_email = row.author_email || "";
         return post;
       });
 
       // Get total count
-      let countQuery = 'SELECT COUNT(*) as total FROM Posts p WHERE 1=1';
+      let countQuery = "SELECT COUNT(*) as total FROM Posts p WHERE 1=1";
       const countParams = [];
-      
-      if (normalizedStatus && normalizedStatus.toLowerCase() !== 'all') {
+
+      if (normalizedStatus && normalizedStatus.toLowerCase() !== "all") {
         const vnMap = {
-          'Approved': 'Đã phê duyệt',
-          'Pending': 'Chờ xử lý',
-          'Rejected': 'Bị từ chối'
+          Approved: "Đã phê duyệt",
+          Pending: "Chờ xử lý",
+          Rejected: "Bị từ chối",
         };
         const vn = vnMap[normalizedStatus] || null;
         if (vn) {
-          countQuery += ' AND (p.status = @param' + (countParams.length + 1) + ' OR p.status = @param' + (countParams.length + 2) + ')';
+          countQuery +=
+            " AND (p.status = @param" +
+            (countParams.length + 1) +
+            " OR p.status = @param" +
+            (countParams.length + 2) +
+            ")";
           countParams.push(normalizedStatus, vn);
         } else {
-          countQuery += ' AND p.status = @param' + (countParams.length + 1);
+          countQuery += " AND p.status = @param" + (countParams.length + 1);
           countParams.push(normalizedStatus);
         }
       }
-      
+
       if (search) {
-        countQuery += ' AND (p.title LIKE @param' + (countParams.length + 1) + ' OR p.content LIKE @param' + (countParams.length + 2) + ')';
+        countQuery +=
+          " AND (p.title LIKE @param" +
+          (countParams.length + 1) +
+          " OR p.content LIKE @param" +
+          (countParams.length + 2) +
+          ")";
         const searchTerm = `%${search}%`;
         countParams.push(searchTerm, searchTerm);
       }
-      
+
       if (user_id) {
-        countQuery += ' AND p.user_id = @param' + (countParams.length + 1);
+        countQuery += " AND p.user_id = @param" + (countParams.length + 1);
         countParams.push(user_id);
       }
 
@@ -202,8 +228,8 @@ static async findById(id) {
           totalItems: total,
           itemsPerPage: limit,
           hasNext: page < totalPages,
-          hasPrev: page > 1
-        }
+          hasPrev: page > 1,
+        },
       };
     } catch (error) {
       throw new Error(`Error finding posts: ${error.message}`);
@@ -224,12 +250,12 @@ static async findById(id) {
       GROUP BY p.post_id, p.title, p.content, p.post_date, p.status, p.photo_urls, p.related_booking_id, p.likes, p.comments_count, p.created_at, p.updated_at, p.user_id, u.name, u.email
       ORDER BY p.post_date DESC
     `;
-    
+
     try {
       const result = await executeQuery(query);
-      return result.recordset.map(row => {
+      return result.recordset.map((row) => {
         const post = new Post(row);
-        post.photo_urls = JSON.parse(post.photo_urls || '[]');
+        post.photo_urls = JSON.parse(post.photo_urls || "[]");
         post.likes = row.likes_count;
         post.comments_count = row.comments_count;
         return post;
@@ -253,12 +279,12 @@ static async findById(id) {
       GROUP BY p.post_id, p.title, p.content, p.post_date, p.status, p.photo_urls, p.related_booking_id, p.likes, p.comments_count, p.created_at, p.updated_at, p.user_id, u.name, u.email
       ORDER BY likes_count DESC, p.post_date DESC
     `;
-    
+
     try {
       const result = await executeQuery(query);
-      return result.recordset.map(row => {
+      return result.recordset.map((row) => {
         const post = new Post(row);
-        post.photo_urls = JSON.parse(post.photo_urls || '[]');
+        post.photo_urls = JSON.parse(post.photo_urls || "[]");
         post.likes = row.likes_count;
         post.comments_count = row.comments_count;
         return post;
@@ -269,34 +295,42 @@ static async findById(id) {
   }
 
   // Cập nhật bài đăng
-  async update(updateData) {
+  static async update(updateData) {
     const allowedFields = [
-      'title', 'content', 'status', 'photo_urls', 'related_booking_id'
+      "title",
+      "content",
+      "status",
+      "photo_urls",
+      "related_booking_id",
     ];
-    
+
     const updates = [];
     const values = [];
-    
+
     for (const [key, value] of Object.entries(updateData)) {
       if (allowedFields.includes(key)) {
-        updates.push(`${key} = @param${values.length + 1}`);
-        if (key === 'photo_urls') {
+        if (key === "photo_urls") {
+          updates.push(`${key} = @param${values.length + 1}`);
           values.push(JSON.stringify(value));
         } else {
+          // ❌ KHÔNG map status nữa, lưu nguyên giá trị (Approved/Rejected/Pending)
+          updates.push(`${key} = @param${values.length + 1}`);
           values.push(value);
         }
       }
     }
-    
+
     if (updates.length === 0) {
-      throw new Error('No valid fields to update');
+      throw new Error("No valid fields to update");
     }
-    
-    updates.push('updated_at = GETDATE()');
+
+    updates.push("updated_at = GETDATE()");
     values.push(this.post_id);
-    
-    const query = `UPDATE Posts SET ${updates.join(', ')} WHERE post_id = @param${values.length}`;
-    
+
+    const query = `UPDATE Posts SET ${updates.join(
+      ", "
+    )} WHERE post_id = @param${values.length}`;
+
     try {
       await executeQuery(query, values);
       return await Post.findById(this.post_id);
@@ -313,31 +347,37 @@ static async findById(id) {
     try {
       // Xóa likes trước
       let req = new sql.Request(tx);
-      req.input('param1', this.post_id);
-      await req.query('DELETE FROM PostLikes WHERE post_id = @param1');
+      req.input("param1", this.post_id);
+      await req.query("DELETE FROM PostLikes WHERE post_id = @param1");
 
       // Xóa comments: xóa reply trước rồi xóa comment cha
       req = new sql.Request(tx);
-      req.input('param1', this.post_id);
-      await req.query('DELETE FROM Comments WHERE post_id = @param1 AND parent_comment_id IS NOT NULL');
+      req.input("param1", this.post_id);
+      await req.query(
+        "DELETE FROM Comments WHERE post_id = @param1 AND parent_comment_id IS NOT NULL"
+      );
       req = new sql.Request(tx);
-      req.input('param1', this.post_id);
-      await req.query('DELETE FROM Comments WHERE post_id = @param1 AND parent_comment_id IS NULL');
+      req.input("param1", this.post_id);
+      await req.query(
+        "DELETE FROM Comments WHERE post_id = @param1 AND parent_comment_id IS NULL"
+      );
 
       // Xóa PostServices liên kết
       req = new sql.Request(tx);
-      req.input('param1', this.post_id);
-      await req.query('DELETE FROM PostServices WHERE post_id = @param1');
+      req.input("param1", this.post_id);
+      await req.query("DELETE FROM PostServices WHERE post_id = @param1");
 
       // Cuối cùng xóa Post
       req = new sql.Request(tx);
-      req.input('param1', this.post_id);
-      await req.query('DELETE FROM Posts WHERE post_id = @param1');
+      req.input("param1", this.post_id);
+      await req.query("DELETE FROM Posts WHERE post_id = @param1");
 
       await tx.commit();
       return true;
     } catch (error) {
-      try { await tx.rollback(); } catch (e) {}
+      try {
+        await tx.rollback();
+      } catch (e) {}
       throw new Error(`Error deleting post: ${error.message}`);
     }
   }
@@ -346,13 +386,13 @@ static async findById(id) {
   async getServices() {
     const query = `
       SELECT ps.*, s.name as name, s.description,
-             v.specific_price, v.variant_name, v.price_min, v.price_max, v.unit
+             v.variant_name, v.price_min, v.price_max, v.unit
       FROM PostServices ps
       LEFT JOIN Services s ON ps.service_id = s.service_id
       LEFT JOIN ServiceVariants v ON ps.variant_id = v.variant_id
       WHERE ps.post_id = @param1
     `;
-    
+
     try {
       const result = await executeQuery(query, [this.post_id]);
       return result.recordset;
@@ -370,7 +410,7 @@ static async findById(id) {
       WHERE c.post_id = @param1 AND c.parent_comment_id IS NULL
       ORDER BY c.created_at ASC
     `;
-    
+
     try {
       const result = await executeQuery(query, [this.post_id]);
       return result.recordset;
@@ -388,7 +428,7 @@ static async findById(id) {
       WHERE pl.post_id = @param1
       ORDER BY pl.liked_at DESC
     `;
-    
+
     try {
       const result = await executeQuery(query, [this.post_id]);
       return result.recordset;
@@ -399,7 +439,8 @@ static async findById(id) {
 
   // Kiểm tra user đã like bài đăng chưa
   async isLikedByUser(userId) {
-    const query = 'SELECT * FROM PostLikes WHERE post_id = @param1 AND user_id = @param2';
+    const query =
+      "SELECT * FROM PostLikes WHERE post_id = @param1 AND user_id = @param2";
     try {
       const result = await executeQuery(query, [this.post_id, userId]);
       return result.recordset.length > 0;
@@ -410,13 +451,31 @@ static async findById(id) {
 
   // Static method để kiểm tra like status
   static async isLikedByUser(postId, userId) {
-    const query = 'SELECT * FROM PostLikes WHERE post_id = @param1 AND user_id = @param2';
+    const query =
+      "SELECT * FROM PostLikes WHERE post_id = @param1 AND user_id = @param2";
     try {
       const result = await executeQuery(query, [postId, userId]);
       return result.recordset.length > 0;
     } catch (error) {
       throw new Error(`Error checking like status: ${error.message}`);
     }
+  }
+  static async updateStatus(post_id, status) {
+    const statusMap = {
+      Approved: "Approved",
+      Pending: "Pending",
+      Rejected: "Rejected",
+    };
+
+    const mapped = statusMap[status] || "Pending";
+
+    const query = `
+    UPDATE Posts
+    SET status = @param1, updated_at = GETDATE()
+    WHERE post_id = @param2
+  `;
+    await executeQuery(query, [mapped, post_id]);
+    return await Post.findById(post_id);
   }
 }
 

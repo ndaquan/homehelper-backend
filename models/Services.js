@@ -19,7 +19,6 @@ class Services {
                                 sv.pricing_type,
                 sv.price_min,
                 sv.price_max,
-                                sv.specific_price,
                                 sv.unit
                             FROM ServiceVariants sv
                             WHERE sv.service_id = s.service_id
@@ -58,7 +57,6 @@ class Services {
                                 sv.pricing_type,
                 sv.price_min,
                 sv.price_max,
-                                sv.specific_price,
                                 sv.unit
                             FROM ServiceVariants sv
                             WHERE sv.service_id = s.service_id

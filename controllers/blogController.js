@@ -1,8 +1,8 @@
-const Post = require('../models/Post');
-const PostLike = require('../models/PostLike');
-const Comment = require('../models/Comment');
-const PostService = require('../models/PostService');
-const { executeQuery } = require('../config/database');
+const Post = require("../models/Post");
+const PostLike = require("../models/PostLike");
+const Comment = require("../models/Comment");
+const PostService = require("../models/PostService");
+const { executeQuery } = require("../config/database");
 
 // Lấy danh sách posts với phân trang
 const getPosts = async (req, res) => {
@@ -10,11 +10,11 @@ const getPosts = async (req, res) => {
     const {
       page = 1,
       limit = 10,
-      search = '',
+      search = "",
       status, // allow client to control status filter; empty string disables default
       user_id = null,
-      sortBy = 'post_date',
-      sortOrder = 'DESC'
+      sortBy = "post_date",
+      sortOrder = "DESC",
     } = req.query;
 
     const options = {
@@ -23,34 +23,36 @@ const getPosts = async (req, res) => {
       search,
       // Only include status if provided; undefined means use model default ('Approved'),
       // empty string '' will override and disable the filter in the model logic
-      ...(typeof status !== 'undefined' ? { status } : {}),
+      ...(typeof status !== "undefined" ? { status } : {}),
       user_id,
       sortBy,
-      sortOrder
+      sortOrder,
     };
 
     const result = await Post.findAll(options);
-    
+
     // Nếu có user_id, thêm trường isLiked cho từng post
     let posts = result.posts;
     if (user_id) {
       const userId = user_id;
       // Kiểm tra like cho từng post
-      await Promise.all(posts.map(async (post) => {
-        post.isLiked = await Post.isLikedByUser(post.post_id, userId);
-      }));
+      await Promise.all(
+        posts.map(async (post) => {
+          post.isLiked = await Post.isLikedByUser(post.post_id, userId);
+        })
+      );
     }
     res.json({
       success: true,
       data: posts,
-      pagination: result.pagination
+      pagination: result.pagination,
     });
   } catch (error) {
-    console.error('Error getting posts:', error);
+    console.error("Error getting posts:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching posts',
-      error: error.message
+      message: "Error fetching posts",
+      error: error.message,
     });
   }
 };
@@ -58,21 +60,21 @@ const getPosts = async (req, res) => {
 // Lấy post theo ID
 const getPostById = async (req, res) => {
   try {
-  const { id } = req.params;
-  const { user_id } = req.query;
-  const post = await Post.findById(id);
-    
+    const { id } = req.params;
+    const { user_id } = req.query;
+    const post = await Post.findById(id);
+
     if (!post) {
       return res.status(404).json({
         success: false,
-        message: 'Post not found'
+        message: "Post not found",
       });
     }
 
     // Lấy thêm thông tin services và comments
     const [services, comments] = await Promise.all([
       post.getServices(),
-      post.getComments()
+      post.getComments(),
     ]);
 
     post.services = services;
@@ -83,14 +85,14 @@ const getPostById = async (req, res) => {
     }
     res.json({
       success: true,
-      data: post
+      data: post,
     });
   } catch (error) {
-    console.error('Error getting post:', error);
+    console.error("Error getting post:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching post',
-      error: error.message
+      message: "Error fetching post",
+      error: error.message,
     });
   }
 };
@@ -102,20 +104,21 @@ const createPost = async (req, res) => {
       user_id: body_user_id,
       title,
       content,
-      status = 'Pending',
+      status = "Pending",
       related_booking_id = null,
       photo_urls = null,
-      services = []
+      services = [],
     } = req.body;
 
     // Lấy user_id từ token nếu không truyền trong body
-    const user_id = body_user_id || (req.user && (req.user.userId || req.user.user_id));
+    const user_id =
+      body_user_id || (req.user && (req.user.userId || req.user.user_id));
 
     // Validate required fields
     if (!title || !content || !user_id) {
       return res.status(400).json({
         success: false,
-        message: 'Title, content and user_id are required'
+        message: "Title, content and user_id are required",
       });
     }
 
@@ -127,11 +130,11 @@ const createPost = async (req, res) => {
       content,
       status,
       related_booking_id,
-      photo_urls
+      photo_urls,
     };
 
     const post = await Post.create(postData);
-    
+
     // Nếu truyền services thủ công -> tạo theo danh sách
     if (services && Array.isArray(services) && services.length > 0) {
       await PostService.createMultiple(post.post_id, services);
@@ -143,7 +146,9 @@ const createPost = async (req, res) => {
           FROM Bookings
           WHERE booking_id = @param1
         `;
-        const bookingResult = await executeQuery(bookingQuery, [related_booking_id]);
+        const bookingResult = await executeQuery(bookingQuery, [
+          related_booking_id,
+        ]);
         const booking = bookingResult.recordset && bookingResult.recordset[0];
         if (booking && booking.service_id) {
           await PostService.create({
@@ -155,21 +160,21 @@ const createPost = async (req, res) => {
         }
       } catch (err) {
         // Không fail toàn bộ post nếu lỗi khi gắn service từ booking
-        console.warn('Không thể gắn service từ booking cho post:', err.message);
+        console.warn("Không thể gắn service từ booking cho post:", err.message);
       }
     }
-    
+
     res.status(201).json({
       success: true,
-      message: 'Post created successfully',
-      data: post
+      message: "Post created successfully",
+      data: post,
     });
   } catch (error) {
-    console.error('Error creating post:', error);
+    console.error("Error creating post:", error);
     res.status(500).json({
       success: false,
-      message: 'Error creating post',
-      error: error.message
+      message: "Error creating post",
+      error: error.message,
     });
   }
 };
@@ -184,7 +189,7 @@ const updatePost = async (req, res) => {
     if (!post) {
       return res.status(404).json({
         success: false,
-        message: 'Post not found'
+        message: "Post not found",
       });
     }
 
@@ -193,7 +198,7 @@ const updatePost = async (req, res) => {
     if (!requesterId || requesterId !== post.user_id) {
       return res.status(403).json({
         success: false,
-        message: 'You are not allowed to update this post'
+        message: "You are not allowed to update this post",
       });
     }
 
@@ -202,8 +207,14 @@ const updatePost = async (req, res) => {
 
     // Sync services if requested
     const services = updateData.services; // optional array
-    const hasServicesField = Object.prototype.hasOwnProperty.call(updateData, 'services');
-    const hasRelatedBookingField = Object.prototype.hasOwnProperty.call(updateData, 'related_booking_id');
+    const hasServicesField = Object.prototype.hasOwnProperty.call(
+      updateData,
+      "services"
+    );
+    const hasRelatedBookingField = Object.prototype.hasOwnProperty.call(
+      updateData,
+      "related_booking_id"
+    );
 
     try {
       if (hasServicesField) {
@@ -223,8 +234,11 @@ const updatePost = async (req, res) => {
               FROM Bookings
               WHERE booking_id = @param1
             `;
-            const bookingResult = await executeQuery(bookingQuery, [related_booking_id]);
-            const booking = bookingResult.recordset && bookingResult.recordset[0];
+            const bookingResult = await executeQuery(bookingQuery, [
+              related_booking_id,
+            ]);
+            const booking =
+              bookingResult.recordset && bookingResult.recordset[0];
             if (booking && booking.service_id) {
               await PostService.create({
                 post_id: post.post_id,
@@ -233,12 +247,15 @@ const updatePost = async (req, res) => {
               });
             }
           } catch (e) {
-            console.warn('Could not rebuild services from booking during update:', e.message);
+            console.warn(
+              "Could not rebuild services from booking during update:",
+              e.message
+            );
           }
         }
       }
     } catch (svcErr) {
-      console.error('Error syncing post services on update:', svcErr);
+      console.error("Error syncing post services on update:", svcErr);
       // Do not fail the entire update if services sync fails; return with warning
     }
 
@@ -246,15 +263,15 @@ const updatePost = async (req, res) => {
     const refreshed = await Post.findById(post.post_id);
     return res.json({
       success: true,
-      message: 'Post updated successfully',
-      data: refreshed
+      message: "Post updated successfully",
+      data: refreshed,
     });
   } catch (error) {
-    console.error('Error updating post:', error);
+    console.error("Error updating post:", error);
     res.status(500).json({
       success: false,
-      message: 'Error updating post',
-      error: error.message
+      message: "Error updating post",
+      error: error.message,
     });
   }
 };
@@ -263,12 +280,12 @@ const updatePost = async (req, res) => {
 const deletePost = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const post = await Post.findById(id);
     if (!post) {
       return res.status(404).json({
         success: false,
-        message: 'Post not found'
+        message: "Post not found",
       });
     }
 
@@ -277,22 +294,22 @@ const deletePost = async (req, res) => {
     if (!requesterId || requesterId !== post.user_id) {
       return res.status(403).json({
         success: false,
-        message: 'You are not allowed to delete this post'
+        message: "You are not allowed to delete this post",
       });
     }
 
     await post.delete();
-    
+
     res.json({
       success: true,
-      message: 'Post deleted successfully'
+      message: "Post deleted successfully",
     });
   } catch (error) {
-    console.error('Error deleting post:', error);
+    console.error("Error deleting post:", error);
     res.status(500).json({
       success: false,
-      message: 'Error deleting post',
-      error: error.message
+      message: "Error deleting post",
+      error: error.message,
     });
   }
 };
@@ -302,17 +319,17 @@ const getRecentPosts = async (req, res) => {
   try {
     const { limit = 5 } = req.query;
     const posts = await Post.findRecent(parseInt(limit));
-    
+
     res.json({
       success: true,
-      data: posts
+      data: posts,
     });
   } catch (error) {
-    console.error('Error getting recent posts:', error);
+    console.error("Error getting recent posts:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching recent posts',
-      error: error.message
+      message: "Error fetching recent posts",
+      error: error.message,
     });
   }
 };
@@ -322,17 +339,17 @@ const getPopularPosts = async (req, res) => {
   try {
     const { limit = 5 } = req.query;
     const posts = await Post.findPopular(parseInt(limit));
-    
+
     res.json({
       success: true,
-      data: posts
+      data: posts,
     });
   } catch (error) {
-    console.error('Error getting popular posts:', error);
+    console.error("Error getting popular posts:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching popular posts',
-      error: error.message
+      message: "Error fetching popular posts",
+      error: error.message,
     });
   }
 };
@@ -342,48 +359,48 @@ const toggleLikePost = async (req, res) => {
   try {
     const { id } = req.params;
     const { user_id } = req.body;
-    
+
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        message: 'User ID is required'
+        message: "User ID is required",
       });
     }
-    
+
     const post = await Post.findById(id);
     if (!post) {
       return res.status(404).json({
         success: false,
-        message: 'Post not found'
+        message: "Post not found",
       });
     }
 
     // Kiểm tra xem user đã like chưa
     const isLiked = await post.isLikedByUser(user_id);
-    
+
     if (isLiked) {
       // Unlike
       await PostLike.delete(id, user_id);
       res.json({
         success: true,
-        message: 'Post unliked successfully',
-        liked: false
+        message: "Post unliked successfully",
+        liked: false,
       });
     } else {
       // Like
       await PostLike.create({ post_id: id, user_id });
       res.json({
         success: true,
-        message: 'Post liked successfully',
-        liked: true
+        message: "Post liked successfully",
+        liked: true,
       });
     }
   } catch (error) {
-    console.error('Error toggling like:', error);
+    console.error("Error toggling like:", error);
     res.status(500).json({
       success: false,
-      message: 'Error toggling like',
-      error: error.message
+      message: "Error toggling like",
+      error: error.message,
     });
   }
 };
@@ -391,17 +408,12 @@ const toggleLikePost = async (req, res) => {
 // Tạo comment
 const createComment = async (req, res) => {
   try {
-    const {
-      post_id,
-      user_id,
-      parent_comment_id = null,
-      content
-    } = req.body;
+    const { post_id, user_id, parent_comment_id = null, content } = req.body;
 
     if (!post_id || !user_id || !content) {
       return res.status(400).json({
         success: false,
-        message: 'Post ID, user ID and content are required'
+        message: "Post ID, user ID and content are required",
       });
     }
 
@@ -409,27 +421,30 @@ const createComment = async (req, res) => {
       post_id,
       user_id,
       parent_comment_id,
-      content
+      content,
     });
 
     // Lấy thông tin user để trả về kèm comment
-    const userQuery = 'SELECT name, email FROM Users WHERE user_id = @param1';
-    const userResult = await require('../config/database').executeQuery(userQuery, [user_id]);
+    const userQuery = "SELECT name, email FROM Users WHERE user_id = @param1";
+    const userResult = await require("../config/database").executeQuery(
+      userQuery,
+      [user_id]
+    );
     const author = userResult.recordset[0] || {};
-    comment.author_name = author.name || 'Ẩn danh';
-    comment.author_email = author.email || '';
+    comment.author_name = author.name || "Ẩn danh";
+    comment.author_email = author.email || "";
 
     res.status(201).json({
       success: true,
-      message: 'Comment created successfully',
-      data: comment
+      message: "Comment created successfully",
+      data: comment,
     });
   } catch (error) {
-    console.error('Error creating comment:', error);
+    console.error("Error creating comment:", error);
     res.status(500).json({
       success: false,
-      message: 'Error creating comment',
-      error: error.message
+      message: "Error creating comment",
+      error: error.message,
     });
   }
 };
@@ -443,24 +458,23 @@ const getPostComments = async (req, res) => {
     const result = await Comment.findByPostId(id, {
       page: parseInt(page),
       limit: parseInt(limit),
-      includeReplies: includeReplies === 'true'
+      includeReplies: includeReplies === "true",
     });
 
     res.json({
       success: true,
       data: result.comments,
-      pagination: result.pagination
+      pagination: result.pagination,
     });
   } catch (error) {
     console.error("Error getting comments:", error);
     res.status(500).json({
       success: false,
       message: "Error fetching comments",
-      error: error.message
+      error: error.message,
     });
   }
 };
-
 
 // Cập nhật comment
 const updateComment = async (req, res) => {
@@ -472,23 +486,23 @@ const updateComment = async (req, res) => {
     if (!comment) {
       return res.status(404).json({
         success: false,
-        message: 'Comment not found'
+        message: "Comment not found",
       });
     }
 
     const updatedComment = await comment.update({ content });
-    
+
     res.json({
       success: true,
-      message: 'Comment updated successfully',
-      data: updatedComment
+      message: "Comment updated successfully",
+      data: updatedComment,
     });
   } catch (error) {
-    console.error('Error updating comment:', error);
+    console.error("Error updating comment:", error);
     res.status(500).json({
       success: false,
-      message: 'Error updating comment',
-      error: error.message
+      message: "Error updating comment",
+      error: error.message,
     });
   }
 };
@@ -497,27 +511,27 @@ const updateComment = async (req, res) => {
 const deleteComment = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const comment = await Comment.findById(id);
     if (!comment) {
       return res.status(404).json({
         success: false,
-        message: 'Comment not found'
+        message: "Comment not found",
       });
     }
 
     await comment.delete();
-    
+
     res.json({
       success: true,
-      message: 'Comment deleted successfully'
+      message: "Comment deleted successfully",
     });
   } catch (error) {
-    console.error('Error deleting comment:', error);
+    console.error("Error deleting comment:", error);
     res.status(500).json({
       success: false,
-      message: 'Error deleting comment',
-      error: error.message
+      message: "Error deleting comment",
+      error: error.message,
     });
   }
 };
@@ -526,27 +540,27 @@ const deleteComment = async (req, res) => {
 const getPostServices = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const post = await Post.findById(id);
     if (!post) {
       return res.status(404).json({
         success: false,
-        message: 'Post not found'
+        message: "Post not found",
       });
     }
 
     const services = await post.getServices();
-    
+
     res.json({
       success: true,
-      data: services
+      data: services,
     });
   } catch (error) {
-    console.error('Error getting post services:', error);
+    console.error("Error getting post services:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching post services',
-      error: error.message
+      message: "Error fetching post services",
+      error: error.message,
     });
   }
 };
@@ -558,14 +572,14 @@ const searchPosts = async (req, res) => {
       q: search,
       page = 1,
       limit = 10,
-      sortBy = 'post_date',
-      sortOrder = 'DESC'
+      sortBy = "post_date",
+      sortOrder = "DESC",
     } = req.query;
 
     if (!search) {
       return res.status(400).json({
         success: false,
-        message: 'Search query is required'
+        message: "Search query is required",
       });
     }
 
@@ -574,23 +588,23 @@ const searchPosts = async (req, res) => {
       limit: parseInt(limit),
       search,
       sortBy,
-      sortOrder
+      sortOrder,
     };
 
     const result = await Post.findAll(options);
-    
+
     res.json({
       success: true,
       data: result.posts,
       pagination: result.pagination,
-      searchQuery: search
+      searchQuery: search,
     });
   } catch (error) {
-    console.error('Error searching posts:', error);
+    console.error("Error searching posts:", error);
     res.status(500).json({
       success: false,
-      message: 'Error searching posts',
-      error: error.message
+      message: "Error searching posts",
+      error: error.message,
     });
   }
 };
@@ -598,12 +612,13 @@ const searchPosts = async (req, res) => {
 // Lấy thống kê
 const getStats = async (req, res) => {
   try {
-    const [postStats, likeStats, commentStats, serviceStats] = await Promise.all([
-      Post.findAll({ page: 1, limit: 1 }),
-      PostLike.getStats(),
-      Comment.getStats(),
-      PostService.getStats()
-    ]);
+    const [postStats, likeStats, commentStats, serviceStats] =
+      await Promise.all([
+        Post.findAll({ page: 1, limit: 1 }),
+        PostLike.getStats(),
+        Comment.getStats(),
+        PostService.getStats(),
+      ]);
 
     res.json({
       success: true,
@@ -613,15 +628,15 @@ const getStats = async (req, res) => {
         totalComments: commentStats.totalComments,
         totalPostServices: serviceStats.total_post_services,
         postsWithServices: serviceStats.posts_with_services,
-        uniqueServicesRequested: serviceStats.unique_services_requested
-      }
+        uniqueServicesRequested: serviceStats.unique_services_requested,
+      },
     });
   } catch (error) {
-    console.error('Error getting stats:', error);
+    console.error("Error getting stats:", error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching stats',
-      error: error.message
+      message: "Error fetching stats",
+      error: error.message,
     });
   }
 };
@@ -635,7 +650,7 @@ const checkLikeStatus = async (req, res) => {
     if (!user_id) {
       return res.status(400).json({
         success: false,
-        message: 'User ID is required'
+        message: "User ID is required",
       });
     }
 
@@ -643,7 +658,7 @@ const checkLikeStatus = async (req, res) => {
     if (!post) {
       return res.status(404).json({
         success: false,
-        message: 'Post not found'
+        message: "Post not found",
       });
     }
 
@@ -654,25 +669,95 @@ const checkLikeStatus = async (req, res) => {
       data: {
         isLiked,
         postId: parseInt(id),
-        userId: parseInt(user_id)
-      }
+        userId: parseInt(user_id),
+      },
     });
   } catch (error) {
-    console.error('Error checking like status:', error);
+    console.error("Error checking like status:", error);
     res.status(500).json({
       success: false,
-      message: 'Error checking like status',
-      error: error.message
+      message: "Error checking like status",
+      error: error.message,
     });
   }
 };
+const getAllPostsForStaff = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || "";
+    const status = req.query.status || "all"; // staff có thể xem tất cả
 
+    const { posts, pagination } = await Post.findAll({
+      page,
+      limit,
+      status,
+      search,
+    });
+
+    res.json({ success: true, data: posts, pagination });
+  } catch (err) {
+    console.error("❌ Lỗi khi lấy danh sách bài viết:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+const approvePost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findById(id);
+
+    if (!post) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy bài viết" });
+    }
+
+    const updated = await Post.updateStatus(id, "Approved");
+    res.json({
+      success: true,
+      message: "✅ Bài viết đã được duyệt",
+      data: updated,
+    });
+  } catch (err) {
+    console.error("❌ Lỗi khi duyệt bài viết:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Không thể duyệt bài viết" });
+  }
+};
+
+const rejectPost = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const post = await Post.findById(id);
+
+    if (!post) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Không tìm thấy bài viết" });
+    }
+
+    const updated = await Post.updateStatus(id, "Rejected");
+    res.json({
+      success: true,
+      message: "🚫 Bài viết đã bị từ chối",
+      data: updated,
+    });
+  } catch (err) {
+    console.error("❌ Lỗi khi từ chối bài viết:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Không thể từ chối bài viết" });
+  }
+};
 module.exports = {
   getPosts,
   getPostById,
   createPost,
   updatePost,
   deletePost,
+  approvePost,
+  rejectPost,
   getRecentPosts,
   getPopularPosts,
   toggleLikePost,
@@ -683,5 +768,6 @@ module.exports = {
   deleteComment,
   getPostServices,
   searchPosts,
-  getStats
+  getStats,
+  getAllPostsForStaff,
 };

@@ -70,7 +70,7 @@ class SocketHandler {
     // Nếu user là Tasker thì cập nhật trạng thái "Hoạt động"
     try {
       if (socket.user?.role === 'Tasker') {
-        await Tasker.updateStatus(socket.userId, 'Hoạt động');
+        await Tasker.updateStatus(socket.userId, 'Active');
       }
     } catch (e) {
       console.error('Không thể cập nhật trạng thái Tasker khi connect:', e?.message || e);
@@ -315,7 +315,7 @@ class SocketHandler {
           // Nếu user là Tasker và không còn kết nối nào thì cập nhật "Không hoạt động"
           try {
             if (socket.user?.role === 'Tasker') {
-              await Tasker.updateStatus(userId, 'Không hoạt động');
+              await Tasker.updateStatus(userId, 'Inactive');
             }
           } catch (e) {
             console.error('Không thể cập nhật trạng thái Tasker khi disconnect:', e?.message || e);

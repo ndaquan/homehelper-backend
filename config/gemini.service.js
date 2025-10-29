@@ -108,14 +108,12 @@ async function processReview(comment, rating) {
 
     let result;
     if (!isConsistent) {
-      // 2️⃣ Bình luận & rating trái ngược → chờ duyệt
       result = {
         allow: true,
-        status: 0,
-        message: "Bình luận và rating không khớp, chuyển vào hàng chờ xử lý.",
+        status: 1, // ✅ đăng luôn, không cần staff duyệt
+        message: "Bình luận và rating không khớp, nhưng vẫn được đăng.",
       };
     } else {
-      // 3️⃣ Bình thường → duyệt ngay
       result = {
         allow: true,
         status: 1,
@@ -143,9 +141,6 @@ async function processReview(comment, rating) {
     return result;
   }
 }
-
-module.exports = { moderateContent, processReview };
-module.exports = { moderateContent };
 
 // -------- Certificate Extraction (multimodal) --------
 const axios2 = axios; // reuse
@@ -468,7 +463,11 @@ YÊU CẦU:
   return { rawText: raw, parsed };
 }
 
-module.exports.extractCertificateFromUrl = extractCertificateFromUrl;
+mmodule.exports = {
+  moderateContent,
+  processReview,
+  extractCertificateFromUrl,
+};
 
 async function moderateVideoText(title, description = "") {
   if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
