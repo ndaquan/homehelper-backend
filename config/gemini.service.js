@@ -463,7 +463,7 @@ YÊU CẦU:
   return { rawText: raw, parsed };
 }
 
-mmodule.exports = {
+module.exports = {
   moderateContent,
   processReview,
   extractCertificateFromUrl,
