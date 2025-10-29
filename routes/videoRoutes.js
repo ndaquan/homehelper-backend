@@ -31,4 +31,4 @@ router.get('/:videoId/comments/tree', VideoController.getVideoCommentTree);
 router.delete('/:videoId', authMiddleware(['Staff', 'Admin']), VideoController.deleteVideoByStaff);
 router.put('/:videoId/status', authenticateToken, requireStaff, VideoController.updateVideoStatus);
 
-module.exports = router;
+  module.exports = router;

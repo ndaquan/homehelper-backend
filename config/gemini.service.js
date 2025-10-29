@@ -469,3 +469,73 @@ YÊU CẦU:
 }
 
 module.exports.extractCertificateFromUrl = extractCertificateFromUrl;
+
+async function moderateVideoText(title, description = "") {
+  if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
+
+  const fullText = `${title} ${description}`.trim();
+  if (!fullText) return { isSafe: true, reason: null };
+
+  const prompt = `Bạn là bộ lọc kiểm duyệt nội dung video. Kiểm tra tiêu đề và mô tả sau có chứa nội dung không phù hợp (tục tĩu, khiêu dâm, bạo lực, phân biệt, lừa đảo, quảng cáo trá hình, clickbait quá mức) không?
+
+Nếu CÓ → trả về đúng định dạng:
+BAD: [lý do ngắn gọn]
+
+Nếu KHÔNG → trả về:
+OK
+
+Không giải thích thêm. Chỉ trả về 1 dòng.
+
+Nội dung:
+Tiêu đề: "${title}"
+Mô tả: "${description}"`;
+
+  const logDir = path.join(__dirname, "logs");
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const logFile = path.join(logDir, "gemini_video_text.log");
+
+  try {
+    const response = await axios.post(
+      `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
+      {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: prompt }],
+          },
+        ],
+      },
+      { headers: { "Content-Type": "application/json" } }
+    );
+
+    const raw = response.data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    const result = raw?.toUpperCase();
+
+    // Ghi log
+    fs.appendFileSync(
+      logFile,
+      `\n[${new Date().toISOString()}] TITLE: "${title}"\nDESC: "${description}"\nRAW: ${raw}\n`
+    );
+
+    // Phân tích kết quả
+    if (result?.startsWith("OK")) {
+      return { isSafe: true, reason: null };
+    }
+
+    if (result?.startsWith("BAD:")) {
+      const reason = raw.substring(4).trim(); // Lấy lý do sau "BAD:"
+      return { isSafe: false, reason };
+    }
+
+    // Nếu không rõ → từ chối an toàn
+    return { isSafe: false, reason: "Không thể xác định nội dung" };
+
+  } catch (error) {
+    fs.appendFileSync(
+      logFile,
+      `\n[${new Date().toISOString()}] ERROR: ${error.message}\nRESPONSE: ${JSON.stringify(error.response?.data)}\n`
+    );
+    return { isSafe: false, reason: "Lỗi kiểm duyệt AI" };
+  }
+}
+module.exports = {moderateVideoText  };
