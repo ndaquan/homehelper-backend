@@ -1,20 +1,81 @@
-const { executeQuery, sql } = require('../config/database');
+const { executeQuery, sql, getPool } = require('../config/database');
 
 class Video {
-  static async getVideosByUser(userId) {
-    const query = `
-      SELECT video_id, user_id, title, description, video_url, public_id, likes, uploaded_at, status
-      FROM Videos
-      WHERE user_id = @param1 AND is_deleted = 0
-      ORDER BY uploaded_at DESC
-    `;
-    try {
-      const result = await executeQuery(query, [userId]);
-      return result.recordset;
-    } catch (error) {
-      throw new Error(`Lỗi khi lấy video của người dùng: ${error.message}`);
-    }
+static async logModeration(videoId, moderation) {
+  const raw = moderation.raw;
+  const frames = raw.data?.frames || [];
+
+  let nudityScore = raw.nudity?.raw || 0;
+  let weaponScore = raw.weapon || 0;
+  let violenceScore = raw.violence || 0;
+  let offensiveScore = raw.offensive?.prob || 0;
+
+  if (frames.length > 0) {
+    frames.forEach(f => {
+      nudityScore = Math.max(nudityScore,
+        f.nudity?.sexual_activity || 0,
+        f.nudity?.sexual_commerce || 0,
+        f.nudity?.erotica || 0,
+        f.nudity?.sextoy || 0,
+        f.nudity?.suggestive || 0
+      );
+      weaponScore = Math.max(weaponScore, f.weapon?.classes?.firearm || 0);
+      violenceScore = Math.max(violenceScore, f.violence?.prob || 0);
+      offensiveScore = Math.max(offensiveScore, f.offensive?.prob || 0);
+    });
   }
+
+  const reasons = [];
+  if (nudityScore >= 0.7) reasons.push('Video chứa nội dung khiêu dâm, khỏa thân vi phạm chính sách');
+  if (weaponScore >= 0.7) reasons.push('Video có hình ảnh vũ khí nguy hiểm');
+  if (violenceScore >= 0.7) reasons.push('Video có nội dung bạo lực vi phạm chính sách');
+  if (offensiveScore >= 0.7) reasons.push('Video có nội dung xúc phạm, thù địch');
+  const rejectionReason = reasons.length > 0 ? reasons.join('. ') : null;
+
+  const query = `
+    INSERT INTO VideoModerations 
+    (video_id, is_safe, nudity_score, weapon_score, violence_score, offensive_score, raw_response, rejection_reason, moderated_at)
+    VALUES (@video_id, @is_safe, @nudity_score, @weapon_score, @violence_score, @offensive_score, @raw_response, @rejection_reason, GETDATE())
+  `;
+
+  try {
+    const pool = await getPool(); // DÙNG getPool() từ database.js
+    const request = pool.request(); // ĐÚNG: pool.request()
+
+    request.input('video_id', sql.Int, videoId);
+    request.input('is_safe', sql.Bit, moderation.isSafe);
+    request.input('nudity_score', sql.Decimal(5,4), parseFloat(nudityScore.toFixed(4)));
+    request.input('weapon_score', sql.Decimal(5,4), parseFloat(weaponScore.toFixed(4)));
+    request.input('violence_score', sql.Decimal(5,4), parseFloat(violenceScore.toFixed(4)));
+    request.input('offensive_score', sql.Decimal(5,4), parseFloat(offensiveScore.toFixed(4)));
+    request.input('raw_response', sql.NVarChar(sql.MAX), JSON.stringify(raw));
+    request.input('rejection_reason', sql.NVarChar(500), rejectionReason);
+
+    await request.query(query);
+  } catch (error) {
+    console.error('Lỗi logModeration:', error);
+    throw error;
+  }
+}
+static async getVideosByUser(userId) {
+  const query = `
+    SELECT 
+      v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, 
+      v.likes, v.uploaded_at, v.status,
+      v.text_moderation_status, v.text_moderation_reason,
+      vm.rejection_reason
+    FROM Videos v
+    LEFT JOIN VideoModerations vm ON v.video_id = vm.video_id AND vm.is_safe = 0
+    WHERE v.user_id = @param1 AND v.is_deleted = 0
+    ORDER BY v.uploaded_at DESC
+  `;
+  try {
+    const result = await executeQuery(query, [userId]);
+    return result.recordset;
+  } catch (error) {
+    throw new Error(`Lỗi khi lấy video của người dùng: ${error.message}`);
+  }
+}
 
   static async getAllVideos() {
     const query = `
@@ -53,20 +114,22 @@ static async getAllVideosForStaff(page = 1, limit = 5) {
       throw new Error(`Lỗi khi lấy tất cả video cho Staff: ${error.message}`);
     }
   }
-
-  static async createVideo(userId, title, description, videoUrl, publicId) {
-    const query = `
-      INSERT INTO Videos (user_id, title, description, video_url, public_id, uploaded_at, status)
-      OUTPUT INSERTED.video_id, INSERTED.user_id, INSERTED.title, INSERTED.description, INSERTED.video_url, INSERTED.public_id, INSERTED.uploaded_at, INSERTED.status
-      VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE(), 'Pending')
-    `;
-    try {
-      const result = await executeQuery(query, [userId, title, description || null, videoUrl, publicId]);
-      return result.recordset[0];
-    } catch (error) {
-      throw new Error(`Lỗi khi tạo video: ${error.message}`);
-    }
+static async createVideo(userId, title, description, videoUrl, publicId, textStatus = 'OK', textReason = null) {
+  const query = `
+    INSERT INTO Videos 
+    (user_id, title, description, video_url, public_id, status, text_moderation_status, text_moderation_reason, uploaded_at)
+    OUTPUT INSERTED.*
+    VALUES (@param1, @param2, @param3, @param4, @param5, 'Pending', @param6, @param7, GETDATE())
+  `;
+  try {
+    const result = await executeQuery(query, [
+      userId, title, description || null, videoUrl, publicId, textStatus, textReason
+    ]);
+    return result.recordset[0];
+  } catch (error) {
+    throw new Error(`Lỗi khi tạo video: ${error.message}`);
   }
+}
 
   static async getVideoById(videoId) {
     const query = `
@@ -155,28 +218,27 @@ static async getAllVideosForStaff(page = 1, limit = 5) {
     }
   }
 
-  static async updateVideoStatus(videoId, status) {
-    if (!['Approved', 'Rejected'].includes(status)) {
-      throw new Error('Trạng thái không hợp lệ. Chỉ được phép là Approved hoặc Rejected.');
-    }
-
-    const query = `
-      UPDATE Videos
-      SET status = @param2
-      OUTPUT INSERTED.video_id, INSERTED.user_id, INSERTED.title, INSERTED.description, 
-             INSERTED.video_url, INSERTED.public_id, INSERTED.uploaded_at, INSERTED.status
-      WHERE video_id = @param1 AND status = 'Pending' AND is_deleted = 0
-    `;
-    try {
-      const result = await executeQuery(query, [videoId, status]);
-      if (result.recordset.length === 0) {
-        throw new Error('Không thể cập nhật trạng thái: Video không tồn tại hoặc không ở trạng thái Pending');
-      }
-      return result.recordset[0];
-    } catch (error) {
-      throw new Error(`Lỗi khi cập nhật trạng thái video: ${error.message}`);
-    }
+ static async updateVideoStatus(videoId, status) {
+  if (!['Approved', 'Rejected', 'Pending'].includes(status)) {
+    throw new Error('Trạng thái không hợp lệ');
   }
+
+  const query = `
+    UPDATE Videos
+    SET status = @param2
+    OUTPUT INSERTED.*
+    WHERE video_id = @param1 AND is_deleted = 0
+  `;
+  try {
+    const result = await executeQuery(query, [videoId, status]);
+    if (result.recordset.length === 0) {
+      throw new Error('Không thể cập nhật trạng thái: Video không tồn tại');
+    }
+    return result.recordset[0];
+  } catch (error) {
+    throw new Error(`Lỗi khi cập nhật trạng thái video: ${error.message}`);
+  }
+}
 }
 
 module.exports = Video;

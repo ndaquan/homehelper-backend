@@ -2,46 +2,63 @@ const { executeQuery, sql } = require('../config/database');
 const Video = require('../models/Video');
 const Comment = require('../models/Comment');
 const { deleteFile } = require('../config/cloudinary');
-const { moderateContent } = require('../config/gemini.service');
+const { moderateContent,moderateVideoText } = require('../config/gemini.service');
+const { moderateAndUpdateVideo } = require('../services/moderation.service');
 const axios = require('axios');
 
 class VideoController {
-  static async uploadVideo(req, res) {
-    try {
-      const { title, description } = req.body;
-      const userId = req.user.user_id;
+ static async uploadVideo(req, res) {
+  let videoId;
+  try {
+    const { title, description } = req.body;
+    const userId = req.user.user_id;
 
-      if (!req.file) {
-        return res.status(400).json({ error: 'Vui lòng cung cấp file video' });
-      }
+    if (!req.file) return res.status(400).json({ error: 'Vui lòng cung cấp file video' });
+    if (!title) return res.status(400).json({ error: 'Vui lòng cung cấp tiêu đề' });
 
-      if (!title) {
-        return res.status(400).json({ error: 'Vui lòng cung cấp tiêu đề video' });
-      }
+    // 1. DUYỆT TEXT
+    const textCheck = await moderateVideoText(title, description);
+    const textStatus = textCheck.isSafe ? 'OK' : 'BAD';
+    const textReason = textCheck.isSafe ? null : textCheck.reason.substring(0, 500);
 
-      const videoUrl = req.file.path;
-      const publicId = req.file.filename;
+    const videoUrl = req.file.path;
+    const publicId = req.file.filename;
+    const publicIdWithExt = publicId.endsWith('.mp4') ? publicId : `${publicId}.mp4`;
 
-      const video = await Video.createVideo(userId, title, description, videoUrl, publicId);
+    // 2. TẠO VIDEO
+    const video = await Video.createVideo(
+      userId, title, description, videoUrl, publicIdWithExt,
+      textStatus, textReason
+    );
+    videoId = video.video_id;
 
-      res.status(201).json({
-        message: 'Upload video thành công',
-        video: {
-          video_id: video.video_id,
-          title: video.title,
-          description: video.description,
-          video_url: video.video_url,
-          public_id: video.public_id,
-          uploaded_at: video.uploaded_at,
-          status: video.status,
-        },
+    // 3. TRẢ KẾT QUẢ CHO USER (LUÔN TRẢ TRƯỚC)
+    if (!textCheck.isSafe) {
+      res.status(200).json({
+        message: 'Upload thành công nhưng tiêu đề/mô tả vi phạm. Vui lòng chỉnh sửa.',
+        video: { ...video, status: 'Pending' },
+        violation: textCheck.reason
       });
-    } catch (error) {
-      console.error('❌ Lỗi khi upload video:', error);
-      res.status(500).json({ error: 'Lỗi server khi upload video' });
+    } else {
+      res.status(201).json({
+        message: 'Upload thành công! Video đang chờ duyệt...',
+        video: { ...video, status: 'Pending' }
+      });
+    }
+
+    // 4. CHẠY DUYỆT VIDEO NỀN
+    moderateAndUpdateVideo(videoId, publicIdWithExt).catch(console.error);
+
+  } catch (error) {
+    console.error('Upload error:', error);
+    if (videoId) {
+      await Video.updateVideoStatus(videoId, 'Pending').catch(() => {});
+    }
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Lỗi upload' });
     }
   }
-
+}
   static async updateVideo(req, res) {
     try {
       const { videoId } = req.params;
@@ -193,19 +210,19 @@ class VideoController {
   }
 
   static async getUserVideos(req, res) {
-    try {
-      const userId = req.user.user_id;
-      const videos = await Video.getVideosByUser(userId);
+  try {
+    const userId = req.user.user_id;
+    const videos = await Video.getVideosByUser(userId);
 
-      res.status(200).json({
-        message: 'Lấy video của người dùng thành công',
-        videos,
-      });
-    } catch (error) {
-      console.error('❌ Lỗi khi lấy video của người dùng:', error);
-      res.status(500).json({ error: 'Lỗi server khi lấy video của người dùng' });
-    }
+    res.status(200).json({
+      message: 'Lấy video của người dùng thành công',
+      videos,
+    });
+  } catch (error) {
+    console.error('Lỗi khi lấy video của người dùng:', error);
+    res.status(500).json({ error: 'Lỗi server khi lấy video của người dùng' });
   }
+}
 
   static async createVideoComment(req, res) {
     try {

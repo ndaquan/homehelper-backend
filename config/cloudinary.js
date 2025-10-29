@@ -94,6 +94,7 @@ const videoStorage = new CloudinaryStorage({
       folder: `${CLOUDINARY_FOLDER_BASE}/videos/${userId}`,
       allowed_formats: ['mp4', 'mov', 'avi', 'mkv'],
       resource_type: 'video',
+      version: null,
     };
   },
 });
@@ -138,6 +139,15 @@ const generateSignedCertificateUrl = (publicId, { resource_type = 'image', ttlSe
   });
   return { url, expiresAt: expiresAt * 1000 };
 };
+const getSecureVideoUrl = (publicId) => {
+  // BỎ v1, v2, 
+  const cleanPublicId = publicId.replace(/\/v\d+\//, '/');
+  return cloudinary.url(cleanPublicId, {
+    resource_type: 'video',
+    secure: true,
+    flags: ['attachment'],
+  });
+};
 module.exports = {
   cloudinary,
   // Prefer these if multer-storage-cloudinary is installed; otherwise use memoryUpload in routes
@@ -148,4 +158,5 @@ module.exports = {
   videoUpload,
   deleteFile,
   generateSignedCertificateUrl,
+  getSecureVideoUrl,
 };
