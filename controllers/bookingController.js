@@ -259,7 +259,9 @@ class BookingController {
           b.location,
           b.status,
           s.name AS service_name,
-          sv.variant_name
+          sv.variant_name,
+          b.expected_price,
+          b.final_price
         FROM Bookings b
         LEFT JOIN Services s ON b.service_id = s.service_id
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
@@ -274,6 +276,7 @@ class BookingController {
           "In Progress": "Đang tiến hành",
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
+          Paid: "Đã thanh toán",
         };
         const vn = vnMap[status] || null;
         if (vn) {
@@ -429,6 +432,7 @@ class BookingController {
           "In Progress": "Đang tiến hành",
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
+          Paid: "Đã thanh toán",
         };
         const vn = vnMap[status] || null;
         if (vn) {
