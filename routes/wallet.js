@@ -10,4 +10,6 @@ router.get('/balance', authenticateToken, walletController.getBalance);
 // GET /api/wallet/history?limit=20
 router.get('/history', authenticateToken, walletController.getHistory);
 
+router.post("/pay", authenticateToken, walletController.payForBooking);
+
 module.exports = router;
