@@ -294,8 +294,8 @@ class Post {
     }
   }
 
-  // Cập nhật bài đăng
-  static async update(updateData) {
+  // Cập nhật bài đăng (instance method)
+  async update(updateData) {
     const allowedFields = [
       "title",
       "content",
@@ -325,7 +325,7 @@ class Post {
     }
 
     updates.push("updated_at = GETDATE()");
-    values.push(this.post_id);
+  values.push(this.post_id);
 
     const query = `UPDATE Posts SET ${updates.join(
       ", "
