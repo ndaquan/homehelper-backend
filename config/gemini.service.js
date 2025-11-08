@@ -346,8 +346,8 @@ YÊU CẦU:
       {
         role: "user",
         parts: [
-          { inline_data: { mime_type: "image/png", data: b64 } },
           { text: prompt },
+          { inline_data: { mime_type: "image/png", data: b64 } },
         ],
       },
     ],
@@ -462,13 +462,6 @@ YÊU CẦU:
 
   return { rawText: raw, parsed };
 }
-
-module.exports = {
-  moderateContent,
-  processReview,
-  extractCertificateFromUrl,
-};
-
 async function moderateVideoText(title, description = "") {
   if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
 
@@ -537,4 +530,11 @@ Mô tả: "${description}"`;
     return { isSafe: false, reason: "Lỗi kiểm duyệt AI" };
   }
 }
-module.exports = {moderateVideoText  };
+
+module.exports = {
+  moderateContent,
+  processReview,
+  extractCertificateFromUrl,
+  moderateVideoText
+};
+
