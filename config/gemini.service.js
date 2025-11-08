@@ -346,8 +346,8 @@ YÊU CẦU:
       {
         role: "user",
         parts: [
-          { inline_data: { mime_type: "image/png", data: b64 } },
           { text: prompt },
+          { inline_data: { mime_type: "image/png", data: b64 } },
         ],
       },
     ],

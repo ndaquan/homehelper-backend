@@ -965,12 +965,12 @@ exports.approveTaskerApplication = async (req, res) => {
     // 2. Insert Taskers row if missing
     const existsTasker = await executeQuery("SELECT tasker_id FROM Taskers WHERE tasker_id=@param1", [app.user_id]);
     if (!existsTasker.recordset.length) {
-      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
+      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Active', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
     }
     // 3. Variants linking
     if (Array.isArray(app.variants) && app.variants.length) {
       for (const variantId of app.variants) {
-        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_service_variant_id, tasker_id, variant_id) VALUES ((SELECT ISNULL(MAX(tasker_service_variant_id),0)+1 FROM TaskerServiceVariants), @param1, @param2)", [app.user_id, variantId]);
+        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_id, variant_id) VALUES (@param1, @param2)", [app.user_id, variantId]);
       }
     }
     // 4. Persist certificates into TaskerCertifications if any not already persisted (looking for cert_id absence)
