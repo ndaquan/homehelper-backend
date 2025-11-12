@@ -59,6 +59,9 @@ exports.getPendingCertifications = async (req, res) => {
           tc.cert_public_id,
           tc.cert_name AS certificate_name,
           tc.created_at AS registered_at,
+          tc.issued_date,
+          tc.parsed_holder_name,
+          tc.parsed_certificate_code,
           tc.tasker_id,
           u.name AS tasker_name,
           tc.variant_ids_json,
@@ -1405,6 +1408,45 @@ exports.createCertification = async (req, res) => {
           } catch (clsErr) { console.warn('Service classification failed', clsErr.message); }
         }
         if (aiServiceMismatchBlock) {
+          // Heuristic override: if certificate text clearly relates to the selected service via synonyms, don't block
+          try {
+            const svcNameRes = await executeQuery('SELECT name FROM Services WHERE service_id = @param1', [service_id]);
+            const serviceName = (svcNameRes.recordset && svcNameRes.recordset.length) ? (svcNameRes.recordset[0].name || '') : '';
+            const norm = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
+            const serviceTokens = norm(serviceName).split(' ').filter(Boolean);
+            const synonyms = {
+              'dieu hoa': [
+                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh', 'air conditioning', 'dien lanh', 'điện lạnh',
+                'sua dieu hoa', 'sua chua dieu hoa', 'sua chua may lanh', 'sua chua dien lanh', 'bao tri dieu hoa', 'bao tri may lanh',
+                'dien dan dung', 'sua chua dien dan dung', 'dien gia dung', 'sua chua dien gia dung', 'sua chua dien', 'tho dien'
+              ],
+              'cham soc nguoi cao tuoi': [
+                'cham soc nguoi cao tuoi', 'nguoi cao tuoi', 'elderly care', 'elderly',
+                'old people', 'cham soc', 'cham soc nguoi gia', 'nguoi gia'
+              ],
+              'nau an': [
+                'nau an', 'nau mon', 'lam mon an', 'am thuc', 'hoc nau an', 'day nau an',
+                'khoa hoc nau an', 'lop hoc nau an', 'mon an', 'mon ngon', 'chef', 'cook',
+                'cooking', 'culinary', 'culinary arts', 'cooking class', 'cooking course',
+                'food preparation', 'recipe', 'dish', 'cuisine', 'baking', 'pastry'
+              ]
+            };
+            let expandedServiceTokens = new Set(serviceTokens);
+            for (const key in synonyms) {
+              if (norm(serviceName).includes(key)) {
+                for (const w of synonyms[key]) expandedServiceTokens.add(norm(w));
+              }
+            }
+            const certText = [parsed.cert_name, parsed.issued_by, parsed.holder_name, parsed.level_or_grade].filter(Boolean).join(' ');
+            const certNorm = norm(certText);
+            let matchCount = 0;
+            for (const token of expandedServiceTokens) { if (!token || token.length < 3) continue; if (certNorm.includes(token)) matchCount++; }
+            if (matchCount > 0) {
+              aiServiceMismatchBlock = false;
+            }
+          } catch(_) {}
+        }
+        if (aiServiceMismatchBlock) {
           return res.status(400).json({ success:false, ai_service_mismatch:true, message:'Chứng chỉ không thuộc nhóm dịch vụ đã chọn', ai_detected_service: aiDetectedService, ai_service_score: aiServiceScore });
         }
         // Duplicate check
@@ -1448,7 +1490,7 @@ exports.createCertification = async (req, res) => {
           }
         }
         if (isDuplicate) {
-          return res.status(409).json({ success:false, duplicate:true, message: `Chứng chỉ đã tồn tại (cert_id=${duplicateCertId}) - ${duplicateReason}` });
+          return res.status(409).json({ success:false, duplicate:true, message: `Chứng chỉ đã tồn tại trong hệ thống. Bạn không được phép dùng chứng chỉ này!` });
         }
         // Service vs variant validation
         let serviceMismatch = false; let allowedServiceIds = [];
@@ -1473,7 +1515,11 @@ exports.createCertification = async (req, res) => {
             const serviceTokens = norm(serviceName).split(' ').filter(Boolean);
             const synonyms = {
               'dieu hoa': [
-                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh'
+                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh', 'air conditioning', 'dien lanh', 'điện lạnh',
+                // Added repair/maintenance related phrases so certificates like "sửa chữa điện lạnh" or "sửa chữa điện dân dụng" are accepted
+                'sua dieu hoa', 'sua chua dieu hoa', 'sua chua may lanh', 'sua chua dien lanh', 'bao tri dieu hoa', 'bao tri may lanh',
+                // General electrical repair treated as acceptable background for AC repair
+                'dien dan dung', 'sua chua dien dan dung', 'dien gia dung', 'sua chua dien gia dung', 'sua chua dien', 'tho dien'
               ],
               'cham soc nguoi cao tuoi': [
                 'cham soc nguoi cao tuoi', 'nguoi cao tuoi', 'elderly care', 'elderly',

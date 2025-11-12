@@ -156,7 +156,7 @@ const login = async (req, res) => {
       });
     }
 
-    // Tìm user theo email
+    // Tìm user theo email (bao gồm trạng thái ban)
     const user = await User.findByEmail(email);
     if (!user) {
       return res.status(401).json({
@@ -172,10 +172,18 @@ const login = async (req, res) => {
       });
     }
 
+    // Kiểm tra trạng thái bị ban
+    if (user.is_banned) {
+      return res.status(403).json({
+        error: 'Tài khoản đã bị khóa. Vui lòng liên hệ hỗ trợ.',
+        banned: true
+      });
+    }
+
     // Bỏ kiểm tra email verification - cho phép đăng nhập luôn
 
-    // Tạo token
-    const token = generateToken(user.user_id, user.role);
+  // Tạo token (có thể thêm cờ is_banned nếu cần)
+  const token = generateToken(user.user_id, user.role);
 
     // Trả về response
     res.status(200).json({
@@ -187,6 +195,7 @@ const login = async (req, res) => {
         role: user.role,
         phone: user.phone,
         cccd_status: user.cccd_status,
+        is_banned: !!user.is_banned,
         created_at: user.created_at
       },
       token
@@ -436,7 +445,7 @@ module.exports.loginWithGoogle = async (req, res) => {
     // Tìm user theo email
     let user = await User.findByEmail(email);
 
-    // Nếu chưa có thì tạo user mới với role mặc định 'Customer'
+  // Nếu chưa có thì tạo user mới với role mặc định 'Customer'
     if (!user) {
       const tempPassword = crypto.randomBytes(16).toString('hex');
       const newUser = await User.create({
@@ -449,6 +458,11 @@ module.exports.loginWithGoogle = async (req, res) => {
       user = newUser;
     }
 
+    // Chặn đăng nhập nếu tài khoản bị ban
+    if (user.is_banned) {
+      return res.status(403).json({ error: 'Tài khoản đã bị khóa. Vui lòng liên hệ hỗ trợ.', banned: true });
+    }
+
     const token = generateToken(user.user_id, user.role);
 
     res.status(200).json({
@@ -459,6 +473,7 @@ module.exports.loginWithGoogle = async (req, res) => {
         email: user.email,
         role: user.role,
         phone: user.phone || null,
+        is_banned: !!user.is_banned,
         created_at: user.created_at || new Date()
       },
       token
