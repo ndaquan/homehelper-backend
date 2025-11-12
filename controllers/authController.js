@@ -178,6 +178,17 @@ const login = async (req, res) => {
     const token = generateToken(user.user_id, user.role);
 
     // Trả về response
+    // Build signed CCCD URL if stored as public_id
+    let cccdSigned = null;
+    try {
+      if (user.cccd_url && !String(user.cccd_url).startsWith('http')) {
+        const { generateSignedCertificateUrl } = require('../config/cloudinary');
+        cccdSigned = generateSignedCertificateUrl(user.cccd_url, { resource_type: 'image', ttlSeconds: 600 }).url;
+      } else {
+        cccdSigned = user.cccd_url || null;
+      }
+    } catch (_) {}
+
     res.status(200).json({
       message: 'Đăng nhập thành công!',
       user: {
@@ -187,6 +198,7 @@ const login = async (req, res) => {
         role: user.role,
         phone: user.phone,
         cccd_status: user.cccd_status,
+        cccd_url: cccdSigned,
         created_at: user.created_at
       },
       token
@@ -213,6 +225,17 @@ const getCurrentUser = async (req, res) => {
       });
     }
 
+    // Signed URL for current user
+    let cccdSigned = null;
+    try {
+      if (user.cccd_url && !String(user.cccd_url).startsWith('http')) {
+        const { generateSignedCertificateUrl } = require('../config/cloudinary');
+        cccdSigned = generateSignedCertificateUrl(user.cccd_url, { resource_type: 'image', ttlSeconds: 600 }).url;
+      } else {
+        cccdSigned = user.cccd_url || null;
+      }
+    } catch (_) {}
+
     res.status(200).json({
       user: {
         user_id: user.user_id,
@@ -221,7 +244,7 @@ const getCurrentUser = async (req, res) => {
         role: user.role,
         phone: user.phone,
         cccd_status: user.cccd_status,
-        cccd_url: user.cccd_url,
+        cccd_url: cccdSigned,
         created_at: user.created_at,
         updated_at: user.updated_at
       }

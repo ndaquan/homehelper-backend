@@ -33,9 +33,9 @@ exports.createQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Bạn đã gửi báo giá cho bài viết này' });
     }
 
-    // Strict price validation against ServiceVariants
+    // Price validation against ServiceVariants (only min/max)
     const vRes = await executeQuery(
-      `SELECT price_min, price_max, specific_price FROM ServiceVariants WHERE variant_id = @param1`,
+      `SELECT price_min, price_max FROM ServiceVariants WHERE variant_id = @param1`,
       [variant_id]
     );
     const v = vRes.recordset[0];
@@ -46,11 +46,6 @@ exports.createQuote = async (req, res) => {
       const max = Number(v.price_max);
       if (priceNum < min || priceNum > max) {
         return res.status(400).json({ success:false, message: `Giá phải nằm trong khoảng ${min} - ${max}` });
-      }
-    } else if (v.specific_price != null) {
-      const sp = Number(v.specific_price);
-      if (priceNum !== sp) {
-        return res.status(400).json({ success:false, message: `Giá phải bằng ${sp}` });
       }
     }
 

@@ -269,15 +269,16 @@ const submit = async (req, res) => {
     // Tự động quyết định dựa trên tỉ lệ khớp
     const autoStatus = comparisonResult.isMatch ? 'Verified' : 'Rejected';
 
-    // Optional: Upload verified front image to Cloudinary and save URL to user
-    let cloudUrl = null;
+    // Optional: Upload verified front image to Cloudinary (authenticated delivery) and save PUBLIC ID to user
+    let cloudPublicId = null;
     try {
       if (autoStatus === 'Verified' && frontFile) {
         const { cloudinary } = require('../config/cloudinary');
         const uploadResult = await new Promise((resolve, reject) => {
           const uploadStream = cloudinary.uploader.upload_stream({
             folder: `${process.env.CLOUDINARY_FOLDER_BASE || 'homehelper'}/cccd/${userId}`,
-            resource_type: 'image'
+            resource_type: 'image',
+            type: 'authenticated'
           }, (error, result) => {
             if (error) return reject(error);
             resolve(result);
@@ -285,21 +286,22 @@ const submit = async (req, res) => {
           const fs = require('fs');
           fs.createReadStream(frontFile.path).pipe(uploadStream);
         });
-        cloudUrl = uploadResult && uploadResult.secure_url;
+        cloudPublicId = uploadResult && uploadResult.public_id;
       }
     } catch (e) {
       console.warn('⚠️ Cloudinary upload failed:', e.message);
     }
 
     // Tạo bản ghi CCCD (lưu dữ liệu user nhập, KHÔNG phải OCR)
-    console.log('💾 Creating CCCD record with face_image_path:', face_cloud_url || faceCloudUrl || ocrResult.face_image_path || '');
+    console.log('💾 Creating CCCD record with face_image_path:', req.body.face_public_id || face_cloud_url || faceCloudUrl || ocrResult.face_image_path || '');
     
     const cccdRecord = await CCCD.create({
       user_id: userId,
       ...userInputData,
       front_image_path: frontFile ? frontFile.filename : '',
       back_image_path: backFile ? backFile.filename : '',
-      face_image_path: face_cloud_url || faceCloudUrl || ocrResult.face_image_path || '',
+      // Prefer Cloudinary public_id if provided (secure), otherwise fallback to existing value
+      face_image_path: req.body.face_public_id || face_cloud_url || faceCloudUrl || ocrResult.face_image_path || '',
       verification_status: autoStatus,
       verified_at: autoStatus === 'Verified' ? new Date().toISOString() : null,
       verified_by: autoStatus === 'Verified' ? userId : null
@@ -310,7 +312,8 @@ const submit = async (req, res) => {
     // Nếu dữ liệu khớp, cập nhật thông tin user
     if (autoStatus === 'Verified') {
       console.log('✅ Dữ liệu khớp, cập nhật user...');
-      await User.updateFromCCCD(userId, { ...userInputData, cccd_url: cloudUrl });
+      // Store public_id instead of direct URL to avoid URL leakage
+      await User.updateFromCCCD(userId, { ...userInputData, cccd_url: cloudPublicId || null });
       console.log('✅ User updated successfully');
     }
 
@@ -328,7 +331,8 @@ const submit = async (req, res) => {
         comparison: comparisonResult,
         ocr_data: ocrData,
         user_input_data: userInputData,
-        cloud_url: cloudUrl || null,
+        // Do not expose direct Cloudinary URL; return null here. Use signed-url endpoint instead
+        cloud_url: null,
         face_cloud_url: faceCloudUrl || null
       }
     });
@@ -551,16 +555,23 @@ const uploadFaceImage = async (req, res) => {
         folder: `${process.env.CLOUDINARY_FOLDER_BASE || 'homehelper'}/cccd/faces/${userId}`,
         public_id: `face-${Date.now()}`,
         resource_type: 'image',
+        type: 'authenticated'
       }
     );
 
-    console.log('✅ Face image uploaded to Cloudinary:', uploadResult.secure_url);
+    console.log('✅ Face image uploaded to Cloudinary:', uploadResult.public_id);
+
+    // Return public_id and a short-lived preview URL for immediate display
+    const { generateSignedCertificateUrl } = require('../config/cloudinary');
+    const signed = generateSignedCertificateUrl(uploadResult.public_id, { resource_type: 'image', ttlSeconds: 600 });
 
     res.json({
       success: true,
       message: 'Upload ảnh mặt thành công',
       data: {
-        face_cloud_url: uploadResult.secure_url
+        face_public_id: uploadResult.public_id,
+        face_signed_url: signed?.url || null,
+        expires_at: signed?.expiresAt || null
       }
     });
 
@@ -583,4 +594,22 @@ module.exports = {
   checkVerifiedCCCD,
   uploadCccd,
   uploadFaceImage
+};
+
+// Generate short-lived signed URL for user's verified CCCD image (Cloudinary authenticated asset)
+module.exports.getSignedCccdUrl = async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.user_id;
+    if (!userId) return res.status(401).json({ success:false, message:'Unauthorized' });
+    const User = require('../models/User');
+    const user = await User.findById(userId);
+    const publicId = user?.cccd_url; // stored as public_id now (not direct URL)
+    if (!publicId) return res.status(404).json({ success:false, message:'Không có hình CCCD đã duyệt' });
+    const { generateSignedCertificateUrl } = require('../config/cloudinary');
+    const { url, expiresAt } = generateSignedCertificateUrl(publicId, { resource_type: 'image', ttlSeconds: 600 });
+    return res.json({ success:true, data: { url, expires_at: expiresAt } });
+  } catch (e) {
+    console.error('getSignedCccdUrl error', e);
+    return res.status(500).json({ success:false, message:'Không tạo được URL tạm thời' });
+  }
 };
