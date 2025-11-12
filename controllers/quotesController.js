@@ -188,7 +188,7 @@ exports.getLatestPendingQuoteWithPeer = async (req, res) => {
     const rows = await executeQuery(`
       SELECT TOP 1 
         q.quote_id, q.post_id, q.tasker_id, q.variant_id, q.proposed_price, q.proposal, q.status, q.sent_at,
-        sv.variant_name, sv.price_min, sv.price_max, sv.specific_price, sv.unit,
+        sv.variant_name, sv.price_min, sv.price_max, sv.unit,
         p.user_id AS customer_id
       FROM Quotes q
       INNER JOIN Posts p ON q.post_id = p.post_id
@@ -216,8 +216,8 @@ exports.getQuoteDetails = async (req, res) => {
     const { quoteId } = req.params;
     const rowRes = await executeQuery(`
       SELECT q.quote_id, q.post_id, q.tasker_id, q.variant_id, q.proposed_price, q.proposal, q.status, q.sent_at,
-             sv.variant_name, sv.price_min, sv.price_max, sv.specific_price, sv.unit,
-             p.user_id AS customer_id
+        sv.variant_name, sv.price_min, sv.price_max, sv.unit,
+        p.user_id AS customer_id
       FROM Quotes q
       INNER JOIN ServiceVariants sv ON q.variant_id = sv.variant_id
       INNER JOIN Posts p ON q.post_id = p.post_id
@@ -259,11 +259,11 @@ exports.updateQuotePrice = async (req, res) => {
     if (!isPostOwner && !isTaskerOwner) return res.status(403).json({ success:false, message: 'Không có quyền cập nhật báo giá này' });
 
     // Validate against a min–max range derived from variant config
-    const vRes = await executeQuery(`SELECT price_min, price_max, specific_price FROM ServiceVariants WHERE variant_id = @param1`, [quote.variant_id]);
+    const vRes = await executeQuery(`SELECT price_min, price_max FROM ServiceVariants WHERE variant_id = @param1`, [quote.variant_id]);
     const v = vRes.recordset[0];
     if (!v) return res.status(400).json({ success:false, message: 'Biến thể dịch vụ không hợp lệ' });
-    const min = v.price_min != null ? Number(v.price_min) : (v.specific_price != null ? Number(v.specific_price) : null);
-    const max = v.price_max != null ? Number(v.price_max) : (v.specific_price != null ? Number(v.specific_price) : null);
+    const min = v.price_min != null ? Number(v.price_min) : null;
+    const max = v.price_max != null ? Number(v.price_max) : null;
     if (min == null || max == null) {
       return res.status(400).json({ success:false, message: 'Biến thể dịch vụ chưa cấu hình khoảng giá' });
     }

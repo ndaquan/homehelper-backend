@@ -148,7 +148,6 @@ const Address = {
                 s.name AS service_name,
                 sv.variant_name,
                 sv.pricing_type,
-                sv.specific_price,
                 sv.unit
               FROM TaskerServiceVariants tsv
               INNER JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id

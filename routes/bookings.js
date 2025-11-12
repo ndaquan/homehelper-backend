@@ -8,18 +8,18 @@ const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getT
 router.post("/", authenticateToken, requireCustomer, bookingController.createFromJobDescription);
 
 // 3️⃣ Tasker cập nhật trạng thái (Start / Reject / Complete)
-router.patch("/:id/status", authenticateToken, requireTasker, bookingController.updateStatus);
-
+router.patch("/:id/status", bookingController.updateStatus);
 // 5️⃣ Khách hàng xem danh sách Booking của mình
-router.get("/my", authenticateToken, bookingController.listMyBookings);
+router.get("/mybookings", authenticateToken, bookingController.listMyBookings);
+
+// Adding authenticateToken to the booking detail route
+router.get("/:id", authenticateToken, bookingController.getBookingDetail); 
 
 // 4️⃣ Khách hàng kiểm tra quyền đánh giá Tasker
 router.get("/:taskerId/can-rate", authenticateToken, bookingController.canRateTasker);
 
-// GET /api/bookings/:bookingId - chi tiết booking
-router.get('/:bookingId', authenticateToken, getBookingDetails);
-
-router.get("/:id", authenticateToken, bookingController.getBookingDetail);
+// // GET /api/bookings/:bookingId - chi tiết booking
+// router.get('/:bookingId', authenticateToken, getBookingDetails);
 
 // PATCH /api/bookings/:bookingId/final-price
 router.patch('/:bookingId/final-price', authenticateToken, updateFinalPrice);

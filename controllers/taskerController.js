@@ -1,3 +1,26 @@
+// module.exports = TaskerController;
+const Address = require("../models/Address");
+const axios = require("axios");
+const Tasker = require("../models/Tasker");
+const TaskerCertification = require("../models/TaskerCertification");
+const { executeQuery } = require("../config/database");
+const { cloudinary, certificateUpload } = require('../config/cloudinary');
+const { extractCertificateFromUrl } = require('../config/gemini.service');
+const TaskerApplication = require('../models/TaskerApplication');
+
+// Lấy danh sách variant_id đã đăng ký của tasker
+exports.getRegisteredVariantIds = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ success: false, message: 'Thiếu tasker_id' });
+    const query = 'SELECT variant_id FROM TaskerServiceVariants WHERE tasker_id = @param1';
+    const result = await executeQuery(query, [id]);
+    const variantIds = (result.recordset || []).map(r => r.variant_id);
+    res.json({ success: true, data: variantIds });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
 // Check if certificate code exists anywhere in the system
 exports.checkCertificateCodeExists = async (req, res) => {
   try {
@@ -12,15 +35,6 @@ exports.checkCertificateCodeExists = async (req, res) => {
     res.status(500).json({ success: false, message: 'Lỗi kiểm tra mã chứng chỉ', error: error.message });
   }
 };
-// module.exports = TaskerController;
-const Address = require("../models/Address");
-const axios = require("axios");
-const Tasker = require("../models/Tasker");
-const TaskerCertification = require("../models/TaskerCertification");
-const { executeQuery } = require("../config/database");
-const { cloudinary, certificateUpload } = require('../config/cloudinary');
-const { extractCertificateFromUrl } = require('../config/gemini.service');
-const TaskerApplication = require('../models/TaskerApplication');
 // Get all approved certificate codes
 exports.getApprovedCertificateCodes = async (req, res) => {
   try {
@@ -35,6 +49,152 @@ exports.getApprovedCertificateCodes = async (req, res) => {
 };
 
 // Lazy require classifyService when needed to avoid circular or load cost
+const TaskerServiceVariants = require("../models/TaskerServiceVariants");
+  // Lấy danh sách chứng chỉ đang pending cho staff duyệt
+exports.getPendingCertifications = async (req, res) => {
+  try {
+    const query = `
+      SELECT 
+          tc.cert_id AS certification_id,
+          tc.cert_public_id,
+          tc.cert_name AS certificate_name,
+          tc.created_at AS registered_at,
+          tc.tasker_id,
+          u.name AS tasker_name,
+          tc.variant_ids_json,
+          s.service_id,
+          s.name AS service_name,
+          v.variant_id,
+          v.variant_name,
+          v.pricing_type,
+          v.price_min,
+          v.price_max,
+          v.unit
+      FROM TaskerCertifications tc
+      JOIN Users u 
+          ON tc.tasker_id = u.user_id
+      LEFT JOIN Services s 
+          ON tc.service_id = s.service_id
+      OUTER APPLY (
+          SELECT 
+              STRING_AGG(v2.variant_name, ', ') AS variant_name,
+              STRING_AGG(v2.pricing_type, ', ') AS pricing_type,
+              MIN(v2.price_min) AS price_min,
+              MAX(v2.price_max) AS price_max,
+              STRING_AGG(v2.unit, ', ') AS unit,
+              STRING_AGG(CONVERT(VARCHAR(10), v2.variant_id), ', ') AS variant_id
+          FROM OPENJSON(tc.variant_ids_json)
+               WITH (variant_id INT '$') AS jsonIds
+          LEFT JOIN ServiceVariants v2
+               ON v2.variant_id = jsonIds.variant_id
+      ) v
+      WHERE tc.status = 'pending'
+      ORDER BY tc.created_at DESC;
+    `;
+
+    const result = await require('../config/database').executeQuery(query, []);
+    res.json({ success: true, data: result.recordset || [] });
+  } catch (e) {
+    console.error('[getPendingCertifications] error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// Tạo bản ghi TaskerCertifications với status pending, đồng bộ trường với FE
+exports.createPendingCertification = async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.user_id;
+  const { service_id, variant_ids = [], cert_ids = [], certs = [], status = 'pending' } = req.body;
+  // Ensure variant_ids is always an array of numbers
+  let variantArr = Array.isArray(variant_ids) ? variant_ids : [];
+  if (typeof variant_ids === 'string' && variant_ids.trim()) {
+    try {
+      variantArr = JSON.parse(variant_ids);
+      if (!Array.isArray(variantArr)) {
+        variantArr = variant_ids.split(',').map(v => parseInt(v.trim(), 10)).filter(Number.isFinite);
+      }
+    } catch {
+      variantArr = variant_ids.split(',').map(v => parseInt(v.trim(), 10)).filter(Number.isFinite);
+    }
+  }
+    if (!service_id || !Array.isArray(cert_ids) || cert_ids.length === 0) {
+      return res.status(400).json({ success: false, message: 'Thiếu service_id hoặc danh sách cert_ids' });
+    }
+    let created = [];
+    for (const cert_public_id of cert_ids) {
+      // Tìm object chứng chỉ từ danh sách certs FE gửi lên
+      let certObj = {};
+      if (Array.isArray(certs)) {
+        certObj = certs.find(c => c.cert_public_id === cert_public_id) || {};
+      }
+      // Nếu cert_public_id đã tồn tại thì bỏ qua, chỉ tạo mới nếu chưa có
+      const checkQuery = `SELECT cert_id FROM TaskerCertifications WHERE cert_public_id = @param1 AND tasker_id = @param2`;
+      const checkResult = await executeQuery(checkQuery, [cert_public_id, userId]);
+      if (checkResult.recordset && checkResult.recordset.length > 0) {
+        continue; // đã có bản ghi, không tạo lại
+      }
+      // Lưu variant_ids cho từng chứng chỉ nếu có, ưu tiên certObj.variant_ids nếu có
+      let variantJson = JSON.stringify(variantArr);
+      if (Array.isArray(certObj.variant_ids) && certObj.variant_ids.length) {
+        variantJson = JSON.stringify(certObj.variant_ids);
+      }
+      // Insert đầy đủ các trường
+      const insertQuery = `INSERT INTO TaskerCertifications (
+        tasker_id, cert_public_id, service_id, variant_ids_json, status, created_at, cert_name, delivery_type, issued_by, issued_date, extracted_payload, ai_status, needs_review, parsed_cert_name, parsed_issued_by, parsed_issued_date, parsed_holder_name, parsed_grade_or_level, parsed_certificate_code, ai_detected_service, ai_confidence
+      ) VALUES (
+        @param1, @param2, @param3, @param4, @param5, GETDATE(), @param6, @param7, @param8, @param9, @param10, @param11, @param12, @param13, @param14, @param15, @param16, @param17, @param18, @param19, @param20
+      )`;
+      await executeQuery(insertQuery, [
+        userId,
+        cert_public_id,
+        service_id,
+        variantJson,
+        status,
+        certObj.cert_name || '',
+        certObj.delivery_type || null,
+        certObj.issued_by || null,
+        certObj.issued_date || null,
+        certObj.extracted_payload || null,
+        certObj.ai_status || null,
+        certObj.needs_review || 0,
+        certObj.parsed_cert_name || null,
+        certObj.parsed_issued_by || null,
+        certObj.parsed_issued_date || null,
+        certObj.parsed_holder_name || null,
+        certObj.parsed_grade_or_level || null,
+        certObj.parsed_certificate_code || null,
+        certObj.ai_detected_service || null,
+        certObj.ai_confidence || null
+      ]);
+      created.push(cert_public_id);
+    }
+    res.json({ success: true, created, status });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// Duyệt chứng chỉ: đổi status và thêm bản ghi dịch vụ/biến thể cho tasker
+exports.approveCertificationAndRegisterService = async (req, res) => {
+  try {
+    const { cert_ids = [], variant_ids = [], tasker_id } = req.body;
+    if (!Array.isArray(cert_ids) || cert_ids.length === 0 || !Array.isArray(variant_ids) || variant_ids.length === 0 || !tasker_id) {
+      return res.status(400).json({ success: false, message: 'Thiếu thông tin duyệt chứng chỉ, dịch vụ hoặc tasker_id' });
+    }
+    // Đổi status các chứng chỉ sang Approved
+    for (const cert_public_id of cert_ids) {
+      const query = `UPDATE TaskerCertifications SET status = @param1 WHERE cert_public_id = @param2 AND tasker_id = @param3`;
+      await executeQuery(query, ['Approved', cert_public_id, tasker_id]);
+    }
+    // Thêm bản ghi vào TaskerServiceVariants cho từng variant
+    for (const variant_id of variant_ids) {
+      await TaskerServiceVariants.add(tasker_id, variant_id);
+    }
+    res.json({ success: true, message: 'Đã duyệt chứng chỉ và đăng ký biến thể cho tasker', cert_ids, variant_ids, tasker_id });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+};
 function getClassifyService() {
   try { return require('../lib/classifyService').classifyService; } catch (_) { return null; }
 }
@@ -248,7 +408,7 @@ exports.updateAddress = async (req, res) => {
       console.warn(
         "⚠️ Không tìm thấy kết quả, cập nhật địa chỉ mà không có tọa độ"
       );
-      const updatedAddress = await Address.update(
+      const updatedAddress = await Address.update( 
         address_id,
         trimmedAddress,
         0,
@@ -538,112 +698,6 @@ exports.searchNearbyUsers = async (req, res) => {
   }
 };
 
-exports.getWithServices = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Tìm tasker theo ID
-    const tasker = await Tasker.findById(id);
-    if (!tasker) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Không tìm thấy Tasker" });
-    }
-
-    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
-    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
-    const target = allTaskers.find((t) => t.tasker_id == id);
-
-    const variants = [];
-    if (target && target.services.length) {
-      target.services.forEach((service) => {
-        service.variants.forEach((v) =>
-          variants.push({
-            ...v,
-            service_id: service.service_id,
-            service_name: service.name,
-          })
-        );
-      });
-    }
-
-    // Trả kết quả JSON
-    res.json({
-      success: true,
-      tasker: {
-        tasker_id: tasker.user_id,
-        name: tasker.name,
-        email: tasker.email,
-        phone: tasker.phone,
-        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
-        rating: target?.rating || 0,
-        reviews: target?.reviewsCount || 0,
-      },
-      variants,
-    });
-  } catch (error) {
-    console.error("❌ Lỗi getWithServices:", error);
-    res.status(500).json({
-      success: false,
-      message: "Lỗi lấy Tasker kèm dịch vụ",
-      error: error.message,
-    });
-  }
-};
-
-// Lấy tasker theo id kèm danh sách service variants
-exports.getWithServices = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Tìm tasker theo ID
-    const tasker = await Tasker.findById(id);
-    if (!tasker) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Không tìm thấy Tasker" });
-    }
-
-    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
-    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
-    const target = allTaskers.find((t) => t.tasker_id == id);
-
-    const variants = [];
-    if (target && target.services.length) {
-      target.services.forEach((service) => {
-        service.variants.forEach((v) =>
-          variants.push({
-            ...v,
-            service_id: service.service_id,
-            service_name: service.name,
-          })
-        );
-      });
-    }
-
-    // Trả kết quả JSON
-    res.json({
-      success: true,
-      tasker: {
-        tasker_id: tasker.user_id,
-        name: tasker.name,
-        email: tasker.email,
-        phone: tasker.phone,
-        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
-        rating: target?.rating || 0,
-        reviews: target?.reviewsCount || 0,
-      },
-      variants,
-    });
-  } catch (error) {
-    console.error("❌ Lỗi getWithServices:", error);
-    res.status(500).json({
-      success: false,
-      message: "Lỗi lấy Tasker kèm dịch vụ",
-      error: error.message,
-    });
-  }
-};
 
 // Lấy danh sách Tasker với khoảng cách từ user đăng nhập
 exports.getTaskersWithDistance = async (req, res) => {
@@ -675,55 +729,37 @@ function toRad(degrees) {
 exports.getWithServices = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log("🟡 [Controller] Nhận request id =", id);
 
-    // Tìm tasker theo ID
     const tasker = await Tasker.findById(id);
-    if (!tasker) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Không tìm thấy Tasker" });
-    }
+    console.log("🟢 [Controller] Tasker:", tasker);
 
-    // Lấy toàn bộ Tasker có dịch vụ, rồi lọc ra tasker tương ứng
-    const allTaskers = await Tasker.findAll("", ""); // lấy toàn bộ tasker có dịch vụ
+    const allTaskers = await Tasker.findAll("", "");
+    console.log("📋 [Controller] Tổng taskers:", allTaskers.length);
+
     const target = allTaskers.find((t) => t.tasker_id == id);
+    console.log("🎯 [Controller] Target tasker:", target);
 
     const variants = [];
-    if (target && target.services.length) {
+    if (target?.services?.length) {
       target.services.forEach((service) => {
-        service.variants.forEach((v) =>
+        service.variants.forEach((v) => {
           variants.push({
             ...v,
             service_id: service.service_id,
             service_name: service.name,
-          })
-        );
+          });
+        });
       });
     }
+    console.log("✅ [Controller] Tổng variants lấy được:", variants.length);
 
-    // Trả kết quả JSON
-    res.json({
-      success: true,
-      tasker: {
-        tasker_id: tasker.user_id,
-        name: tasker.name,
-        email: tasker.email,
-        phone: tasker.phone,
-        avatar_url: `https://i.pravatar.cc/80?u=${tasker.user_id}`,
-        rating: target?.rating || 0,
-        reviews: target?.reviewsCount || 0,
-      },
-      variants,
-    });
+    res.json({ success: true, tasker, variants });
   } catch (error) {
-    console.error("❌ Lỗi getWithServices:", error);
-    res.status(500).json({
-      success: false,
-      message: "Lỗi lấy Tasker kèm dịch vụ",
-      error: error.message,
-    });
+    console.error("❌ [Controller] Lỗi:", error);
+    res.status(500).json({ success: false, message: error.message });
   }
-}
+};
 
 // Nâng cấp customer -> tasker
 exports.upgradeToTasker = async (req, res) => {
@@ -929,12 +965,12 @@ exports.approveTaskerApplication = async (req, res) => {
     // 2. Insert Taskers row if missing
     const existsTasker = await executeQuery("SELECT tasker_id FROM Taskers WHERE tasker_id=@param1", [app.user_id]);
     if (!existsTasker.recordset.length) {
-      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
+      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Active', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
     }
     // 3. Variants linking
     if (Array.isArray(app.variants) && app.variants.length) {
       for (const variantId of app.variants) {
-        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_service_variant_id, tasker_id, variant_id) VALUES ((SELECT ISNULL(MAX(tasker_service_variant_id),0)+1 FROM TaskerServiceVariants), @param1, @param2)", [app.user_id, variantId]);
+        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_id, variant_id) VALUES (@param1, @param2)", [app.user_id, variantId]);
       }
     }
     // 4. Persist certificates into TaskerCertifications if any not already persisted (looking for cert_id absence)
@@ -1436,8 +1472,19 @@ exports.createCertification = async (req, res) => {
             const norm = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
             const serviceTokens = norm(serviceName).split(' ').filter(Boolean);
             const synonyms = {
-              'dieu hoa': ['dieu hoa','may lanh','air','aircon','airconditioner','hvac','lanh'],
-              'cham soc nguoi cao tuoi': ['cham soc nguoi cao tuoi','nguoi cao tuoi','elderly care','elderly','old people','cham soc','cham soc nguoi gia','nguoi gia']
+              'dieu hoa': [
+                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh'
+              ],
+              'cham soc nguoi cao tuoi': [
+                'cham soc nguoi cao tuoi', 'nguoi cao tuoi', 'elderly care', 'elderly',
+                'old people', 'cham soc', 'cham soc nguoi gia', 'nguoi gia'
+              ],
+              'nau an': [
+                'nau an', 'nau mon', 'lam mon an', 'am thuc', 'hoc nau an', 'day nau an',
+                'khoa hoc nau an', 'lop hoc nau an', 'mon an', 'mon ngon', 'chef', 'cook',
+                'cooking', 'culinary', 'culinary arts', 'cooking class', 'cooking course',
+                'food preparation', 'recipe', 'dish', 'cuisine', 'baking', 'pastry'
+              ]
             };
             let expandedServiceTokens = new Set(serviceTokens);
             for (const key in synonyms) {
@@ -1709,6 +1756,81 @@ exports.recheckApplicationCertifications = async (req, res) => {
   } catch (e) {
     console.error('recheckApplicationCertifications error', e);
     res.status(500).json({ success:false, message:'Lỗi re-check', error:e.message });
+  }
+};
+
+exports.getAllCertificationsOfTasker = async (req, res) => {
+  const { taskerId } = req.params;
+  try {
+    const query = `
+      SELECT 
+          c.cert_id,
+          c.cert_public_id,
+          c.cert_name,
+          c.issued_by,
+          c.issued_date,
+          c.status,
+          c.parsed_certificate_code,
+          c.variant_ids_json,
+          s.service_id,
+          s.name AS service_name,
+          v.variant_id,
+          v.variant_name,
+          v.pricing_type,
+          v.price_min,
+          v.price_max,
+          v.unit
+      FROM TaskerCertifications c
+      LEFT JOIN Services s 
+          ON c.service_id = s.service_id
+      OUTER APPLY (
+          SELECT STRING_AGG(v2.variant_name, ', ') AS variant_name,
+                 STRING_AGG(v2.pricing_type, ', ') AS pricing_type,
+                 MIN(v2.price_min) AS price_min,
+                 MAX(v2.price_max) AS price_max,
+                 STRING_AGG(v2.unit, ', ') AS unit,
+                 STRING_AGG(CONVERT(VARCHAR(10), v2.variant_id), ', ') AS variant_id
+          FROM OPENJSON(c.variant_ids_json)
+               WITH (variant_id INT '$') AS jsonIds
+          LEFT JOIN ServiceVariants v2
+               ON v2.variant_id = jsonIds.variant_id
+      ) v
+      WHERE c.tasker_id = @param1
+      ORDER BY c.issued_date DESC;
+    `;
+
+    const result = await executeQuery(query, [taskerId]);
+    res.json({
+      success: true,
+      data: result.recordset || []
+    });
+  } catch (e) {
+    console.error("Error fetching tasker certifications:", e);
+    res.status(500).json({
+      success: false,
+      message: e.message
+    });
+  }
+};
+
+// Staff reject certifications
+exports.rejectCertifications = async (req, res) => {
+  try {
+    const { cert_ids, variant_ids, tasker_id } = req.body;
+    if (!Array.isArray(cert_ids) || !tasker_id) {
+      return res.status(400).json({ success: false, message: 'Missing cert_ids or tasker_id' });
+    }
+    // Update status to 'rejected' for the given cert_public_id(s)
+    for (const cert_public_id of cert_ids) {
+      await executeQuery(
+        `UPDATE TaskerCertifications SET status = 'rejected' WHERE cert_public_id = @param1 AND tasker_id = @param2`,
+        [cert_public_id, tasker_id]
+      );
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('Reject certifications error:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
 

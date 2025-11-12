@@ -133,20 +133,27 @@ class BookingController {
       console.log("📩 [DEBUG] GET booking by ID =", bookingId);
 
       const query = `
-  SELECT 
-    b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
-    b.booking_time, b.start_time, b.end_time, b.location, b.status,
-    b.type, b.work_type, b.base_price, b.surcharge, b.final_price,
-    t.status AS tasker_status,
-    t.rating AS tasker_rating,
-    s.name AS service_name,
-    v.variant_name, v.pricing_type, v.unit, v.price_min, v.price_max
-  FROM Bookings b
-  LEFT JOIN Taskers t ON b.tasker_id = t.tasker_id
-  LEFT JOIN Services s ON b.service_id = s.service_id
-  LEFT JOIN ServiceVariants v ON b.variant_id = v.variant_id
-  WHERE b.booking_id = @bookingId;
-`;
+        SELECT 
+          b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
+          b.booking_time, b.start_time, b.end_time, b.location, b.status,
+          b.type, b.work_type, b.base_price, b.surcharge, b.final_price, b.expected_price,
+          t.status AS tasker_status,
+          t.rating AS tasker_rating,
+          s.name AS service_name,
+          v.variant_name, v.pricing_type, v.unit, v.price_min, v.price_max,
+          uc.name AS customer_name, uc.email AS customer_email, uc.phone AS customer_phone,
+          ut.name AS tasker_name, ut.email AS tasker_email, ut.phone AS tasker_phone,
+          tk.description AS task_description,
+          tk.checklist AS task_checklist
+        FROM Bookings b
+        LEFT JOIN Taskers t ON b.tasker_id = t.tasker_id
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants v ON b.variant_id = v.variant_id
+        LEFT JOIN Users uc ON b.customer_id = uc.user_id
+        LEFT JOIN Users ut ON b.tasker_id = ut.user_id
+        LEFT JOIN Tasks tk ON b.booking_id = tk.booking_id 
+        WHERE b.booking_id = @bookingId;
+      `;
 
       const result = await executeQuery(query, { bookingId });
       console.log("📊 [DEBUG] SQL result:", result.recordset);
@@ -238,7 +245,7 @@ class BookingController {
   static async listMyBookings(req, res) {
     try {
       const userId = req.user.userId;
-      const { status = null, limit = 50 } = req.query;
+          const { status = null, limit = 50 } = req.query;
 
       let query = `
         SELECT TOP ${parseInt(limit)}
@@ -252,7 +259,9 @@ class BookingController {
           b.location,
           b.status,
           s.name AS service_name,
-          sv.variant_name
+          sv.variant_name,
+          b.expected_price,
+          b.final_price
         FROM Bookings b
         LEFT JOIN Services s ON b.service_id = s.service_id
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
@@ -267,6 +276,7 @@ class BookingController {
           "In Progress": "Đang tiến hành",
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
+          Paid: "Đã thanh toán",
         };
         const vn = vnMap[status] || null;
         if (vn) {
@@ -317,7 +327,6 @@ class BookingController {
             sv.unit,
             sv.price_min,
             sv.price_max,
-            sv.specific_price,
             uc.name AS customer_name,
             ut.name AS tasker_name
           FROM Bookings b
@@ -423,6 +432,7 @@ class BookingController {
           "In Progress": "Đang tiến hành",
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
+          Paid: "Đã thanh toán",
         };
         const vn = vnMap[status] || null;
         if (vn) {

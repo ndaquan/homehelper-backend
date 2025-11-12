@@ -1,9 +1,25 @@
 const WalletTx = require('../models/WalletTransaction');
+const { getPool, sql } = require('../config/database');
+
+async function computeBalance(pool, user_id) {
+  const rs = await pool.request()
+    .input("user_id", sql.Int, user_id)
+    .query(`
+      SELECT ISNULL(SUM(
+        CASE WHEN type='credit' THEN amount
+             WHEN type='debit' THEN -amount
+             ELSE 0 END
+      ),0) AS balance
+      FROM WalletTransactions
+      WHERE user_id=@user_id
+    `);
+  return Number(rs.recordset[0]?.balance || 0);
+}
 
 // GET /api/wallet/balance
 exports.getBalance = async (req, res) => {
   try {
-    const user_id = req.user?.userId;
+    const user_id = req.user?.user_id;
     if (!user_id) return res.status(401).json({ error: 'unauthorized' });
 
     const balance = await WalletTx.getBalance(user_id);
@@ -16,7 +32,7 @@ exports.getBalance = async (req, res) => {
 // GET /api/wallet/history
 exports.getHistory = async (req, res) => {
   try {
-    const user_id = req.user?.userId;
+    const user_id = req.user?.user_id;
     if (!user_id) return res.status(401).json({ error: 'unauthorized' });
 
     const limit = Number(req.query.limit) || 20;
@@ -26,3 +42,120 @@ exports.getHistory = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
+
+exports.payForBooking = async (req, res) => {
+  const user_id = req.user?.user_id;
+  if (!user_id) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+  const { booking_id, amount } = req.body || {};
+  if (!booking_id) return res.status(400).json({ success: false, message: "booking_id is required" });
+
+  console.log("=== [DEBUG payForBooking] ===");
+  console.log("user_id:", user_id);
+  console.log("booking_id:", booking_id);
+  console.log("amount:", amount);
+
+  let tx;
+  try {
+    const pool = await getPool();
+    console.log("✅ Connected to DB");  
+
+    // 1) Lấy booking và số tiền cần thanh toán
+    const bRs = await pool.request()
+      .input("booking_id", sql.Int, booking_id)
+      .query(`
+        SELECT TOP 1
+          b.booking_id,
+          b.customer_id,
+          b.tasker_id,
+          b.status,
+          b.final_price,
+          b.expected_price
+        FROM Bookings b
+        WHERE b.booking_id = @booking_id
+      `);
+      console.log("📦 Booking record:", bRs.recordset[0]);
+
+    const booking = bRs.recordset[0];
+    if (!booking) {
+      console.log("⚠️ Booking not found");
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+    console.log("🧮 Start transaction...");
+
+    if (booking.customer_id !== user_id) {
+      return res.status(403).json({ success: false, message: "You cannot pay for this booking" });
+    }
+
+    // Tiền cần trừ: ưu tiên final_price, sau đó expected_price, hoặc amount client gửi
+    const toPay = Number(
+      amount ??
+      booking.final_price ??
+      booking.expected_price ??
+      0
+    );
+    if (!toPay || toPay <= 0) {
+      return res.status(400).json({ success: false, message: "Invalid amount to pay" });
+    }
+
+    // 2) Kiểm tra số dư
+    const currentBalance = await computeBalance(pool, user_id);
+    if (currentBalance < toPay) {
+      return res.status(400).json({
+        success: false,
+        message: "Số dư không đủ. Vui lòng nạp thêm tiền.",
+        balance: currentBalance
+      });
+    }
+
+    // 3) Transaction: trừ tiền + ghi giao dịch + cập nhật booking
+    tx = new sql.Transaction(pool);
+    await tx.begin();
+
+    const reqTx = new sql.Request(tx);
+    console.log("💰 Begin insert WalletTransactions...");
+
+    // 3.1) Ghi giao dịch debit
+    await reqTx
+      .input("user_id", sql.Int, user_id)
+      .input("amount", sql.Money, toPay)
+      .input("type", sql.NVarChar, "debit")
+      .input("purpose", sql.NVarChar, "booking_payment")
+      .input("related_id", sql.Int, booking_id)
+      .input("note", sql.NVarChar, "Local fake payment")
+      .query(`
+        INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
+        VALUES (@user_id, @amount, @type, @purpose, @related_id, @note, SYSUTCDATETIME());
+      `);
+      console.log("✅ Insert done");
+
+    // 3.2) Cập nhật trạng thái booking = "Đã thanh toán"
+    await reqTx
+      .input("booking_id", sql.Int, booking_id)
+      .query(`
+        UPDATE Bookings
+        SET status = N'Đã thanh toán'
+        WHERE booking_id = @booking_id;
+      `);
+
+    await tx.commit();
+      console.log("✅ COMMIT DONE!");
+
+    // 4) Trả về số dư mới
+    const newBalance = currentBalance - toPay;
+
+    return res.json({
+      success: true,
+      message: "Thanh toán thành công (local fake)",
+      booking_id,
+      paid_amount: toPay,
+      balance_after: newBalance
+    });
+  } catch (e) {
+    if (tx) {
+      try { await tx.rollback(); } catch { }
+    }
+    console.error("[wallet.pay] error:", e);
+    return res.status(500).json({ success: false, message: "Payment failed (local)" });
+  }
+}
