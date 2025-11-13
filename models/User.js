@@ -27,7 +27,7 @@ class User {
   static async findByEmail(email) {
     try {
       const query = `
-        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, created_at, updated_at
+        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, created_at, updated_at, is_banned
         FROM users 
         WHERE email = @email
       `;
@@ -153,9 +153,9 @@ class User {
       const hashedPassword = await bcrypt.hash(password, 10);
       
       const query = `
-        INSERT INTO users (name, email, password, role, phone, created_at, updated_at)
-        OUTPUT INSERTED.user_id, INSERTED.name, INSERTED.email, INSERTED.role
-        VALUES (@name, @email, @password, @role, @phone, GETDATE(), GETDATE())
+        INSERT INTO users (name, email, password, role, phone, created_at, updated_at, is_banned)
+        OUTPUT INSERTED.user_id, INSERTED.name, INSERTED.email, INSERTED.role, INSERTED.is_banned
+        VALUES (@name, @email, @password, @role, @phone, GETDATE(), GETDATE(), 0)
       `;
       
       const result = await executeQuery(query, {
