@@ -1,4 +1,4 @@
-const { executeQuery, getPool } = require('../config/database');
+const { executeQuery, getPool, sql } = require('../config/database');
 const Quote = require('../models/Quotes');
 
 const getTaskerIdByUserId = async (userId) => {
@@ -93,7 +93,7 @@ exports.getMyQuoteForPost = async (req, res) => {
 
 exports.acceptQuote = async (req, res) => {
   const pool = await getPool();
-  const transaction = new pool.Transaction();
+  const transaction = new sql.Transaction(pool); // FIX: use sql.Transaction instead of pool.Transaction
   try {
     await transaction.begin();
 
@@ -128,7 +128,7 @@ exports.acceptQuote = async (req, res) => {
 
 exports.rejectQuote = async (req, res) => {
   const pool = await getPool();
-  const transaction = new pool.Transaction();
+  const transaction = new sql.Transaction(pool); // FIX: use sql.Transaction instead of pool.Transaction
   try {
     await transaction.begin();
 
@@ -149,7 +149,7 @@ exports.rejectQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
     }
 
-    await Quote.updateQuoteStatus(quoteId, 'Đã từ chối', transaction);
+    await Quote.updateQuoteStatus(quoteId, 'Từ chối', transaction);
     await transaction.commit();
     return res.json({ success: true });
   } catch (err) {
