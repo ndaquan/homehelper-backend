@@ -155,3 +155,35 @@ exports.deleteBadge = async (req, res) => {
     res.status(500).json({ error: 'Không xóa được huy hiệu' });
   }
 };
+
+// Lấy danh sách huy hiệu (đã đạt) theo taskerId/userId
+// Trả về cả thời điểm earned_at từ bảng UserBadges
+exports.getBadgesForTasker = async (req, res) => {
+  try {
+    const idParam = req.params.id || req.params.taskerId || req.params.userId;
+    const userId = Number(idParam);
+    if (!userId) {
+      return res.status(400).json({ error: 'Thiếu hoặc không hợp lệ taskerId' });
+    }
+    // Lấy huy hiệu đã cấp cho user kèm metadata tiêu chí
+    const sql = `
+      SELECT 
+        b.badge_id,
+        b.name AS badge_name,
+        b.description,
+        b.icon_url,
+        b.criteria_key,
+        b.criteria_value,
+        ub.earned_at
+      FROM UserBadges ub
+      INNER JOIN Badges b ON b.badge_id = ub.badge_id
+      WHERE ub.user_id = @user_id
+      ORDER BY ub.earned_at DESC`;
+    const result = await executeQuery(sql, { user_id: userId });
+    res.json({ data: result.recordset || [] });
+  } catch (e) {
+    console.error('[getBadgesForTasker] error', e);
+    res.status(500).json({ error: 'Không lấy được huy hiệu tasker' });
+  }
+};
+

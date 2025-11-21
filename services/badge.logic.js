@@ -40,7 +40,12 @@ const BadgeLogicMap = {
 
   // 4) Đã xác minh CCCD (Users.cccd_status = 'Đã xác minh')
   async VERIFIED_CCCD(userId) {
-    const q = `SELECT CASE WHEN cccd_status = N'Đã xác minh' THEN 1 ELSE 0 END AS verified FROM Users WHERE user_id = @user_id`;
+    const q = `
+      SELECT CASE 
+        WHEN UPPER(CONVERT(NVARCHAR(100), LTRIM(RTRIM(cccd_status)))) COLLATE SQL_Latin1_General_CP1_CI_AI LIKE N'%DA XAC MINH%'
+          THEN 1 ELSE 0 
+      END AS verified 
+      FROM Users WHERE user_id = @user_id`;
     const r = await executeQuery(q, { user_id: userId });
     return scalar(r, 0);
   },
@@ -74,23 +79,52 @@ const BadgeLogicMap = {
 
   // 8) Số người yêu thích (Wishlist.favorite_taskers là JSON array các tasker_id)
   async FAVORITED_BY(userId) {
-    // Dùng OPENJSON để đếm số Wishlist có chứa userId trong mảng favorite_taskers.
-    // Fallback LIKE để phòng DB không bật JSON (ít khả năng)
-    const qJson = `
-      SELECT COUNT(*) AS cnt
-      FROM Wishlist
-      WHERE ISJSON(favorite_taskers) = 1
-        AND EXISTS (
-          SELECT 1 FROM OPENJSON(favorite_taskers) AS j
-          WHERE TRY_CAST(j.value AS int) = @user_id
-        )`;
+    // Hỗ trợ nhiều định dạng:
+    // - JSON array các số: [12, 34]
+    // - JSON array chuỗi số: ["12","34"]
+    // - JSON array object: [{"tasker_id":12}, {"id":34}]
+    // - Chuỗi không phải JSON (ví dụ: "12, 34" hoặc "[12,34]") → chuẩn hóa rồi LIKE có dấu phân cách để tránh trùng tiền tố
+    const qRobust = `
+      DECLARE @uid NVARCHAR(20) = CAST(@user_id AS NVARCHAR(20));
+      
+      ;WITH JSONMatches AS (
+        SELECT 1 AS m
+        FROM Wishlist
+        WHERE ISJSON(favorite_taskers) = 1
+          AND EXISTS (
+            SELECT 1
+            FROM OPENJSON(favorite_taskers)
+                 WITH (
+                   id_int INT '$',
+                   id1   INT '$.tasker_id',
+                   id2   INT '$.id',
+                   id_str NVARCHAR(100) '$'
+                 ) j
+            WHERE COALESCE(j.id_int, j.id1, j.id2, TRY_CAST(j.id_str AS INT)) = @user_id
+          )
+      ), StringMatches AS (
+        SELECT 1 AS m
+        FROM Wishlist
+        WHERE ISJSON(favorite_taskers) = 0
+          AND (
+            ',' + 
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  REPLACE(CAST(favorite_taskers AS NVARCHAR(MAX)), '[',''),
+                ']',''), '"',''), ' ','')
+            + ','
+          ) LIKE '%,' + @uid + ',%'
+      )
+      SELECT (SELECT COUNT(*) FROM JSONMatches) + (SELECT COUNT(*) FROM StringMatches) AS cnt;`;
+
     try {
-      const r1 = await executeQuery(qJson, { user_id: userId });
-      return scalar(r1, 0);
+      const r = await executeQuery(qRobust, { user_id: userId });
+      return scalar(r, 0);
     } catch (e) {
-      // Fallback (kém chính xác nếu ID là tiền tố của ID khác):
+      // Fallback cuối cùng: LIKE đơn giản (kém chính xác hơn)
       const likeStr = `%${userId}%`;
-      const qLike = `SELECT COUNT(*) AS cnt FROM Wishlist WHERE favorite_taskers LIKE @likeStr`;
+      const qLike = `SELECT COUNT(*) AS cnt FROM Wishlist WHERE CAST(favorite_taskers AS NVARCHAR(MAX)) LIKE @likeStr`;
       const r2 = await executeQuery(qLike, { likeStr });
       return scalar(r2, 0);
     }
