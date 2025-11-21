@@ -156,7 +156,7 @@ const login = async (req, res) => {
       });
     }
 
-    // Tìm user theo email
+    // Tìm user theo email (bao gồm trạng thái ban)
     const user = await User.findByEmail(email);
     if (!user) {
       return res.status(401).json({
@@ -172,9 +172,17 @@ const login = async (req, res) => {
       });
     }
 
+    // Kiểm tra trạng thái bị ban
+    if (user.is_banned) {
+      return res.status(403).json({
+        error: 'Tài khoản đã bị khóa. Vui lòng liên hệ hỗ trợ.',
+        banned: true
+      });
+    }
+
     // Bỏ kiểm tra email verification - cho phép đăng nhập luôn
 
-    // Tạo token
+    // Tạo token (có thể thêm cờ is_banned nếu cần)
     const token = generateToken(user.user_id, user.role);
 
     // Trả về response
@@ -187,7 +195,7 @@ const login = async (req, res) => {
       } else {
         cccdSigned = user.cccd_url || null;
       }
-    } catch (_) {}
+    } catch (_) { }
 
     res.status(200).json({
       message: 'Đăng nhập thành công!',
@@ -199,6 +207,7 @@ const login = async (req, res) => {
         phone: user.phone,
         cccd_status: user.cccd_status,
         cccd_url: cccdSigned,
+        is_banned: !!user.is_banned,
         created_at: user.created_at
       },
       token
@@ -217,7 +226,7 @@ const login = async (req, res) => {
 const getCurrentUser = async (req, res) => {
   try {
     const userId = req.user.userId;
-    
+
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -234,7 +243,7 @@ const getCurrentUser = async (req, res) => {
       } else {
         cccdSigned = user.cccd_url || null;
       }
-    } catch (_) {}
+    } catch (_) { }
 
     res.status(200).json({
       user: {
@@ -394,23 +403,23 @@ const verifyEmail = async (req, res) => {
     if (!stored || stored !== token) {
       return res.status(400).json({ error: 'Token không hợp lệ hoặc đã hết hạn' });
     }
-    
+
     // Cập nhật trạng thái email đã xác minh
     const user = await User.findByEmail(email);
     if (!user) {
       return res.status(404).json({ error: 'Không tìm thấy user' });
     }
-    
+
     // Cập nhật trạng thái email đã xác minh trong memory
     emailVerificationStatus.set(email, { verified: true, userId: user.user_id });
-    
+
     // Xóa token verification
     verificationTokens.delete(email);
-    
+
     // Tạo JWT token sau khi xác minh thành công
     const authToken = generateToken(user.user_id, user.role);
-    
-    res.status(200).json({ 
+
+    res.status(200).json({
       message: 'Xác minh email thành công! Bạn có thể đăng nhập ngay bây giờ.',
       token: authToken,
       user: {
@@ -472,6 +481,11 @@ module.exports.loginWithGoogle = async (req, res) => {
       user = newUser;
     }
 
+    // Chặn đăng nhập nếu tài khoản bị ban
+    if (user.is_banned) {
+      return res.status(403).json({ error: 'Tài khoản đã bị khóa. Vui lòng liên hệ hỗ trợ.', banned: true });
+    }
+
     const token = generateToken(user.user_id, user.role);
 
     res.status(200).json({
@@ -482,6 +496,7 @@ module.exports.loginWithGoogle = async (req, res) => {
         email: user.email,
         role: user.role,
         phone: user.phone || null,
+        is_banned: !!user.is_banned,
         created_at: user.created_at || new Date()
       },
       token
