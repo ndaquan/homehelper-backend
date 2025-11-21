@@ -24,10 +24,17 @@ const getBalance = async (user_id) => {
     .input('user_id', sql.Int, user_id)
     .query(`
       SELECT 
-        ISNULL(SUM(CASE WHEN type='credit' THEN amount ELSE -amount END), 0) AS balance
+        ISNULL(SUM(
+          CASE 
+            WHEN type IN ('credit', 'refund', 'compensation') THEN amount
+            WHEN type = 'debit' THEN -amount
+            ELSE 0
+          END
+        ), 0) AS balance
       FROM WalletTransactions
       WHERE user_id=@user_id
     `);
+    console.log("=== BE SQL RESULT (REAL) ===", result.recordset[0]);
   return result.recordset[0].balance;
 };
 
@@ -43,6 +50,7 @@ const getHistory = async (user_id, limit = 20) => {
       WHERE user_id=@user_id
       ORDER BY created_at DESC
     `);
+    console.log("=== BE SQL RESULT ===", result.recordset[0]);
   return result.recordset;
 };
 

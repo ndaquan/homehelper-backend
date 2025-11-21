@@ -1,4 +1,5 @@
 const { executeQuery } = require("../config/database");
+const { getReliabilityColor, getReliabilityLabel } = require("../utils/reliability");
 
 class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
@@ -13,6 +14,7 @@ class Tasker {
         t.certifications,
         t.status,
         ISNULL(t.rating, 0) AS rating,
+        ISNULL(t.reliability_score, 100) AS reliability_score,
         ISNULL(rc.review_count, 0) AS reviewsCount,
         s.service_id,
         s.name AS service_name,
@@ -59,6 +61,7 @@ class Tasker {
 
       rows.forEach((row) => {
         if (!taskersMap[row.tasker_id]) {
+          const score = row.reliability_score || 0;
           taskersMap[row.tasker_id] = {
             tasker_id: row.tasker_id,
             name: row.tasker_name,
@@ -67,6 +70,9 @@ class Tasker {
             rating: parseFloat(row.rating),
             reviewsCount: row.reviewsCount,
             status: row.status,
+            reliability_score: score,
+            reliability_color: getReliabilityColor(score),
+            reliability_label: getReliabilityLabel(score),
             services: [],
           };
         }
@@ -128,6 +134,7 @@ class Tasker {
           t.certifications,
           t.status,
           ISNULL(t.rating, 0) AS rating,
+          ISNULL(t.reliability_score, 100) AS reliability_score,
           ISNULL(rc.review_count, 0) AS reviewsCount,
           s.service_id,
           s.name AS service_name,
@@ -164,6 +171,9 @@ class Tasker {
             reviewsCount: row.reviewsCount,
             email: row.email,
             status: row.status,
+            reliability_score: score,
+            reliability_color: getReliabilityColor(score),
+            reliability_label: getReliabilityLabel(score),
             services: [],
           };
         }
@@ -202,6 +212,7 @@ class Tasker {
       const query = `
         SELECT *
         FROM Users
+        JOIN Taskers t ON t.tasker_id = u.user_id
         WHERE role = 'Tasker' AND user_id = @param1
       `;
       const result = await executeQuery(query, [id]);
