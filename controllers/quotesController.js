@@ -126,6 +126,42 @@ exports.acceptQuote = async (req, res) => {
   }
 };
 
+// Approve quote (status 'Chấp nhận') – tương tự accept nhưng dùng chuỗi khác để hiển thị trên UI
+exports.approveQuote = async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  try {
+    await transaction.begin();
+
+    const requesterId = req.user?.userId || req.user?.user_id;
+    const { quoteId } = req.params;
+
+    const quote = await Quote.findQuoteById(quoteId);
+    if (!quote) {
+      await transaction.rollback();
+      return res.status(404).json({ success:false, message: 'Quote không tồn tại' });
+    }
+    if (quote.customer_id !== requesterId) {
+      await transaction.rollback();
+      return res.status(403).json({ success:false, message: 'Không có quyền chấp nhận quote này' });
+    }
+    if (quote.status !== 'Chờ xử lý') {
+      await transaction.rollback();
+      return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
+    }
+
+    await Quote.updateQuoteStatus(quoteId, 'Chấp nhận', transaction);
+    await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
+
+    await transaction.commit();
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('approveQuote error', err);
+    try { await transaction.rollback(); } catch (_) {}
+    return res.status(500).json({ success:false, message: 'Lỗi server' });
+  }
+};
+
 exports.rejectQuote = async (req, res) => {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool); // FIX: use sql.Transaction instead of pool.Transaction
