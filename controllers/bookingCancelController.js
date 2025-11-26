@@ -82,25 +82,27 @@ class BookingCancelController {
                 );
             }
 
-            if (cancelledBy === "tasker" || cancelledBy === "no_show") {
-                let penalty = -10; // mặc định hủy bình thường
-
-                if (cancelledBy === "no_show") {
-                    penalty = -30;
-                } else {
-                    // kiểm tra sát giờ (<2h)
-                    const now = new Date();
-                    const start = new Date(booking.start_time);
-                    const diffHours = (start - now) / (1000 * 60 * 60);
-
-                    if (diffHours < 2 && diffHours > 0) {
-                        penalty = -20;
-                    }
+            if (cancelledBy === "tasker" || cancelledBy === "tasker_late") {
+                // --- 1) Nếu khách chưa thanh toán: KHÔNG phạt ---
+                if (!booking.isPaid) {
+                    console.log("Tasker hủy nhưng khách chưa thanh toán → Không phạt.");
+                    return;
                 }
 
-                console.log(`🔥 Trừ điểm Tasker (${booking.tasker_id}) = ${penalty}`);
+                // --- 2) Nếu khách đã thanh toán: Áp dụng phạt ---
+                let penalty = 0;
+
+                if (cancelledBy === "tasker") {
+                    penalty = -10; // hủy bình thường (>2h)
+                }
+
+                if (cancelledBy === "tasker_late") {
+                    penalty = -20; // hủy sát giờ (<2h)
+                }
+
                 await updateReliabilityScore(booking.tasker_id, penalty);
             }
+
 
             return res.json({
                 success: true,
