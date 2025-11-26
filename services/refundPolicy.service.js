@@ -36,6 +36,15 @@ function calculateRefundPolicy(booking, cancelledBy) {
     };
   }
 
+  if (cancelledBy === "tasker_late") {
+    return {
+      ruleCode: "R5",
+      refundPercent: 100,
+      compensationPercent: 0,
+      note: "Tasker hủy sát giờ"
+    };
+  }
+
   // R7: Hệ thống (thiên tai / lỗi kỹ thuật / auto cancel unpaid…)
   if (cancelledBy === "system") {
     return {

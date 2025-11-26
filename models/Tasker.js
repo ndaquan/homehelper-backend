@@ -112,14 +112,22 @@ class Tasker {
 
   // Cập nhật trạng thái hoạt động của tasker
   static async updateStatus(taskerId, status) {
-    try {
-      const query = `UPDATE Taskers SET status = @param1 WHERE tasker_id = @param2`;
-      await executeQuery(query, [status, taskerId]);
-      return true;
-    } catch (err) {
-      console.error('Lỗi cập nhật trạng thái Tasker:', err);
-      return false;
+    console.log("🔥 [DEBUG] updateStatus() CALLED:", { taskerId, status });
+    console.log("📌 [Stack]\n", new Error().stack);
+
+    // 👇 DÙNG ENUM ĐÚNG VỚI DATABASE
+    const ALLOWED = ["Hoạt động", "Không hoạt động", "Bị chặn"];
+
+    if (!ALLOWED.includes(status)) {
+      console.error("❌ [ERROR] Status KHÔNG hợp lệ:", status);
+      return false; // chặn lại không cho chạy xuống SQL
     }
+
+    const query = `UPDATE Taskers SET status = @param1 WHERE tasker_id = @param2`;
+    console.log("🔵 SQL RUN:", query, [status, taskerId]);
+
+    await executeQuery(query, [status, taskerId]);
+    return true;
   }
 
   // Lấy danh sách tasker theo variant_id (liên kết qua TaskerServiceVariants)
@@ -211,7 +219,7 @@ class Tasker {
     try {
       const query = `
         SELECT *
-        FROM Users
+        FROM Users u
         JOIN Taskers t ON t.tasker_id = u.user_id
         WHERE role = 'Tasker' AND user_id = @param1
       `;
