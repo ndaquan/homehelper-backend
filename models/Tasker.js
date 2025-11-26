@@ -211,7 +211,7 @@ class Tasker {
     try {
       const query = `
         SELECT *
-        FROM Users
+        FROM Users u
         JOIN Taskers t ON t.tasker_id = u.user_id
         WHERE role = 'Tasker' AND user_id = @param1
       `;
