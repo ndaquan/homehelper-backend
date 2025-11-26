@@ -20,6 +20,11 @@ require('dotenv').config();
 const { connectDB } = require("./config/database");
 const SocketHandler = require("./socket/socketHandler");
 const { setIOInstance } = require("./controllers/conversationController");
+const { startNightlyBadgeJob } = require('./services/badge.nightly');
+
+const { autoCancelUnpaidBookings } = require("./jobs/autoCancelUnpaidBookings");
+setInterval(autoCancelUnpaidBookings, 5 * 60 * 1000);
+console.log("🕒 AutoCancel job running every 5 minutes...");
 
 // Khởi tạo Express app
 const app = express();
@@ -97,6 +102,7 @@ app.use("/api/uploads", require("./routes/uploads"));
 app.use("/api/quotes", require("./routes/quotes"));
 app.use("/api/videos", require("./routes/videoRoutes"));
 app.use("/api/negotiations", require("./routes/negotiations"));
+app.use("/api/badges", require("./routes/badges"));
 // app.use('/api/users', require('./routes/users'));
 // app.use('/api/bookings', require('./routes/bookings'));
 // app.use('/api/posts', require('./routes/posts'));
@@ -158,6 +164,14 @@ async function startServer() {
       console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
       console.log(`📅 Thời gian: ${new Date().toLocaleString("vi-VN")}`);
       console.log("=".repeat(50));
+
+      // Bắt đầu lên lịch job duyệt và cấp huy hiệu lúc 02:00 sáng hằng ngày
+      try {
+        startNightlyBadgeJob();
+        console.log('🏅 Đã kích hoạt lịch quét huy hiệu lúc 02:00 hằng ngày.');
+      } catch (e) {
+        console.error('Không thể khởi động lịch quét huy hiệu:', e);
+      }
     });
   } catch (error) {
     console.error("❌ Không thể khởi động server:", error);

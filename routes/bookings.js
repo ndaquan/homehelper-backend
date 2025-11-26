@@ -71,4 +71,6 @@ router.patch(
   sessionController.updateSession
 );
 
+router.post("/:id/cancel", cancelBooking);
+
 module.exports = router;

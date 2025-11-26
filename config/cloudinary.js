@@ -259,6 +259,8 @@ module.exports = {
   videoUpload,
   handleTaskPhotosUpload,
   deleteFile,
+  uploadBufferToCloudinary,
+  uploadBadgeIcon,
   generateSignedCertificateUrl,
   getSecureVideoUrl,
 };
