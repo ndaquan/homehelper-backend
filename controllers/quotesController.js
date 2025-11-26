@@ -33,7 +33,7 @@ exports.createQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Bạn đã gửi báo giá cho bài viết này' });
     }
 
-    // Strict price validation against ServiceVariants
+    // Price validation against ServiceVariants (only min/max)
     const vRes = await executeQuery(
       `SELECT price_min, price_max FROM ServiceVariants WHERE variant_id = @param1`,
       [variant_id]
