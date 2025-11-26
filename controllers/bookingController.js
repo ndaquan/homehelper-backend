@@ -1,5 +1,6 @@
 const { executeQuery } = require("../config/database");
 const Booking = require("../models/Booking");
+const { updateReliabilityScore } = require("../services/reliabilityScore.service");
 
 class BookingController {
   // ============================================
@@ -143,6 +144,7 @@ class BookingController {
           v.variant_name, v.pricing_type, v.unit, v.price_min, v.price_max,
           uc.name AS customer_name, uc.email AS customer_email, uc.phone AS customer_phone,
           ut.name AS tasker_name, ut.email AS tasker_email, ut.phone AS tasker_phone,
+          tk.task_id,
           tk.description AS task_description,
           tk.checklist AS task_checklist
         FROM Bookings b
@@ -185,6 +187,20 @@ class BookingController {
         `UPDATE Bookings SET status = @status WHERE booking_id = @id`,
         { id, status }
       );
+
+      const bookingRes = await executeQuery(
+        `SELECT tasker_id FROM Bookings WHERE booking_id = @param1`,
+        [id]
+      );
+
+      const booking = bookingRes.recordset?.[0];
+
+      if (booking) {
+        if (status === "Hoàn thành" || status === "Completed") {
+          console.log(`🎉 Cộng +5 điểm cho tasker ${booking.tasker_id}`);
+          await updateReliabilityScore(booking.tasker_id, +5);
+        }
+      }
 
       res.json({ success: true, message: `Cập nhật trạng thái: ${status}` });
     } catch (error) {
@@ -245,7 +261,7 @@ class BookingController {
   static async listMyBookings(req, res) {
     try {
       const userId = req.user.userId;
-          const { status = null, limit = 50 } = req.query;
+      const { status = null, limit = 50 } = req.query;
 
       let query = `
         SELECT TOP ${parseInt(limit)}
@@ -428,7 +444,7 @@ class BookingController {
       if (status) {
         const vnMap = {
           Pending: "Chờ xử lý",
-          Accepted: "Đã chấp nhận", 
+          Accepted: "Đã chấp nhận",
           "In Progress": "Đang tiến hành",
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
