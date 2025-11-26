@@ -62,6 +62,7 @@ CREATE TABLE Users (
     cccd_uploaded_at DATETIME2,
     cccd_verified_at DATETIME2,
     cccd_verified_by INT,
+    is_banned BIT NOT NULL DEFAULT 0,
     CONSTRAINT FK_Users_VerifiedBy FOREIGN KEY (cccd_verified_by) REFERENCES Users(user_id)
 );
 GO

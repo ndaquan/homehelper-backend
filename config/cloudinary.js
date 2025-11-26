@@ -1,10 +1,11 @@
-const dotenv = require('dotenv');
-const cloudinary = require('cloudinary').v2;
-const multer = require('multer');
+const dotenv = require("dotenv");
+const cloudinary = require("cloudinary").v2;
+const multer = require("multer");
+const { executeQuery } = require("./database");
 let CloudinaryStorage;
 try {
   // Optional dependency: only required if using storage-based uploads
-  ({ CloudinaryStorage } = require('multer-storage-cloudinary'));
+  ({ CloudinaryStorage } = require("multer-storage-cloudinary"));
 } catch (_) {
   // If not installed, routes can still use upload_stream fallback
 }
@@ -19,18 +20,20 @@ const {
   CLOUDINARY_API_KEY,
   CLOUDINARY_API_SECRET,
   CLOUDINARY_SECURE,
-  CLOUDINARY_FOLDER_BASE = 'homehelper',
+  CLOUDINARY_FOLDER_BASE = "homehelper",
 } = process.env;
 
 if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
-  console.warn('⚠️ Cloudinary env vars missing. File uploads will fail until configured.');
+  console.warn(
+    "⚠️ Cloudinary env vars missing. File uploads will fail until configured."
+  );
 }
 
 cloudinary.config({
   cloud_name: CLOUDINARY_CLOUD_NAME,
   api_key: CLOUDINARY_API_KEY,
   api_secret: CLOUDINARY_API_SECRET,
-  secure: String(CLOUDINARY_SECURE || 'true').toLowerCase() === 'true',
+  secure: String(CLOUDINARY_SECURE || "true").toLowerCase() === "true",
 });
 
 // Optional: CloudinaryStorage-based multer middlewares
@@ -40,14 +43,18 @@ let avatarUpload = null;
 let postImagesUpload = null;
 // 3) Certificate upload (dynamic folder per user: <base>/certificates/<userId>)
 let certificateUpload = null;
+let taskPhotosUpload = null;
 
 if (CloudinaryStorage) {
   const avatarStorage = new CloudinaryStorage({
     cloudinary,
     params: async () => ({
       folder: `${CLOUDINARY_FOLDER_BASE}/avatars`,
-      allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-      transformation: [{ width: 300, height: 300, crop: 'fill' }, { quality: 'auto' }],
+      allowed_formats: ["jpg", "jpeg", "png", "webp"],
+      transformation: [
+        { width: 300, height: 300, crop: "fill" },
+        { quality: "auto" },
+      ],
     }),
   });
   avatarUpload = multer({ storage: avatarStorage });
@@ -55,28 +62,44 @@ if (CloudinaryStorage) {
   const postImagesStorage = new CloudinaryStorage({
     cloudinary,
     params: async (req, file) => {
-      const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+      const userId =
+        (req.user && (req.user.userId || req.user.user_id)) || "anonymous";
       return {
         folder: `${CLOUDINARY_FOLDER_BASE}/posts/${userId}`,
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-        resource_type: 'image',
+        allowed_formats: ["jpg", "jpeg", "png", "webp"],
+        resource_type: "image",
         // Optionally: public_id: `${Date.now()}-${file.originalname.replace(/[^a-z0-9_.-]/gi, '_')}`
       };
     },
   });
   postImagesUpload = multer({ storage: postImagesStorage });
+  const taskPhotosStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+      const userId =
+        (req.user && (req.user.userId || req.user.user_id)) || "anonymous";
+      return {
+        folder: `${CLOUDINARY_FOLDER_BASE}/task-photos/${userId}`,
+        allowed_formats: ["jpg", "jpeg", "png", "webp"],
+        resource_type: "image",
+      };
+    },
+  });
+
+  taskPhotosUpload = multer({ storage: taskPhotosStorage });
 
   const certificateStorage = new CloudinaryStorage({
     cloudinary,
     params: async (req, file) => {
-      const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+      const userId =
+        (req.user && (req.user.userId || req.user.user_id)) || "anonymous";
       return {
         folder: `${CLOUDINARY_FOLDER_BASE}/certificates/${userId}`,
         // Accept common image formats plus pdf (auto handles)
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'pdf'],
-        resource_type: 'auto',
+        allowed_formats: ["jpg", "jpeg", "png", "webp", "pdf"],
+        resource_type: "auto",
         // Switch to authenticated delivery so direct URLs require signing
-        type: 'authenticated',
+        type: "authenticated",
       };
     },
   });
@@ -89,11 +112,12 @@ const memoryUpload = multer({ storage: multer.memoryStorage() });
 const videoStorage = new CloudinaryStorage({
   cloudinary,
   params: async (req, file) => {
-    const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+    const userId =
+      (req.user && (req.user.userId || req.user.user_id)) || "anonymous";
     return {
       folder: `${CLOUDINARY_FOLDER_BASE}/videos/${userId}`,
-      allowed_formats: ['mp4', 'mov', 'avi', 'mkv'],
-      resource_type: 'video',
+      allowed_formats: ["mp4", "mov", "avi", "mkv"],
+      resource_type: "video",
       version: null,
     };
   },
@@ -102,10 +126,10 @@ const videoStorage = new CloudinaryStorage({
 const videoUpload = multer({
   storage: videoStorage,
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('video/')) {
+    if (file.mimetype.startsWith("video/")) {
       cb(null, true);
     } else {
-      cb(new Error('Only video files are allowed'), false);
+      cb(new Error("Only video files are allowed"), false);
     }
   },
   limits: {
@@ -113,66 +137,115 @@ const videoUpload = multer({
   },
 });
 
-const deleteFile = async (publicId, resourceType = 'image') => {
+const deleteFile = async (publicId, resourceType = "image") => {
   try {
-    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    await cloudinary.uploader.destroy(publicId, {
+      resource_type: resourceType,
+    });
     return true;
   } catch (error) {
     throw new Error(`Failed to delete file from Cloudinary: ${error.message}`);
   }
 };
-
-// Helper: upload a raw Buffer to Cloudinary using upload_stream and return the result
-const uploadBufferToCloudinary = (buffer, options = {}) => {
-  return new Promise((resolve, reject) => {
-    try {
-      const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      });
-      stream.end(buffer);
-    } catch (err) {
-      reject(err);
+const handleTaskPhotosUpload = (photoType) => async (req, res) => {
+  try {
+    const taskId = req.params.taskId;
+    if (!req.files || req.files.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "No files uploaded" });
     }
-  });
-};
 
-// Specialized helper for uploading badge icon to base/badges/<badgeId>
-const uploadBadgeIcon = async (buffer, badgeId, { transformation = [{ quality: 'auto' }], resource_type = 'image' } = {}) => {
-  if (!badgeId) throw new Error('badgeId is required for badge icon upload');
-  const folder = `${CLOUDINARY_FOLDER_BASE}/badges/${badgeId}`;
-  const result = await uploadBufferToCloudinary(buffer, {
-    folder,
-    resource_type,
-    transformation,
-  });
-  return result; // contains secure_url, public_id, etc.
-};
+    const uploadedFiles = [];
 
+    if (taskPhotosUpload) {
+      // Nếu CloudinaryStorage, req.files đã có path
+      for (const file of req.files) {
+        const photoUrl = file.path; // URL Cloudinary
+        await executeQuery(
+          `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
+           VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
+          {
+            taskId,
+            photoUrl,
+            photoType,
+            uploadedBy: req.user.userId || req.user.user_id,
+          }
+        );
+        uploadedFiles.push(photoUrl);
+      }
+    } else {
+      // Fallback: upload manually via upload_stream
+      const userId = req.user.userId || req.user.user_id;
+      const folderBase = process.env.CLOUDINARY_FOLDER_BASE || "homehelper";
+      const folder = `${folderBase}/tasks/${taskId}`;
+
+      const uploads = await Promise.all(
+        req.files.map(
+          (file) =>
+            new Promise((resolve, reject) => {
+              const stream = cloudinary.uploader.upload_stream(
+                { folder, resource_type: "image" },
+                async (error, result) => {
+                  if (error) return reject(error);
+
+                  await db.query(
+                    `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
+                   VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
+                    {
+                      taskId,
+                      photoUrl: result.secure_url,
+                      photoType,
+                      uploadedBy: req.user.userId || req.user.user_id,
+                    }
+                  );
+
+                  resolve(result.secure_url);
+                }
+              );
+              stream.end(file.buffer);
+            })
+        )
+      );
+
+      uploadedFiles.push(...uploads);
+    }
+
+    res.json({ success: true, files: uploadedFiles });
+  } catch (err) {
+    console.error("Upload error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Upload failed", error: err.message });
+  }
+};
 // Helper: generate a short-lived signed URL for an authenticated asset
 // ttlSeconds default 3600 (1h). Cloudinary signed URLs are created via sign_url util.
-const generateSignedCertificateUrl = (publicId, { resource_type = 'image', ttlSeconds = 3600 } = {}) => {
+const generateSignedCertificateUrl = (
+  publicId,
+  { resource_type = "image", ttlSeconds = 3600 } = {}
+) => {
   if (!publicId) return null;
   const expiresAt = Math.floor(Date.now() / 1000) + ttlSeconds; // epoch seconds
   // cloudinary.url with sign_url true will append token; for authenticated assets we also can use private_download_url for downloads
   const url = cloudinary.url(publicId, {
     resource_type,
-    type: 'authenticated',
+    type: "authenticated",
     sign_url: true,
     expires_at: expiresAt,
     secure: true,
     // Always provide an image preview, even for PDFs: first page as JPG with auto quality
-    transformation: [{ page: 1, fetch_format: 'jpg', quality: 'auto' }],
+    transformation: [{ page: 1, fetch_format: "jpg", quality: "auto" }],
   });
   return { url, expiresAt: expiresAt * 1000 };
 };
 const getSecureVideoUrl = (publicId) => {
-  // BỎ v1, v2, 
-  const cleanPublicId = publicId.replace(/\/v\d+\//, '/');
+  // BỎ v1, v2,
+  const cleanPublicId = publicId.replace(/\/v\d+\//, "/");
   return cloudinary.url(cleanPublicId, {
-    resource_type: 'video',
+    resource_type: "video",
     secure: true,
-    flags: ['attachment'],
+    flags: ["attachment"],
   });
 };
 module.exports = {
@@ -181,8 +254,10 @@ module.exports = {
   avatarUpload,
   postImagesUpload,
   certificateUpload,
+  taskPhotosUpload,
   memoryUpload,
   videoUpload,
+  handleTaskPhotosUpload,
   deleteFile,
   uploadBufferToCloudinary,
   uploadBadgeIcon,
