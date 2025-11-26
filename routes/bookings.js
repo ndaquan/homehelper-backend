@@ -3,6 +3,7 @@ const router = express.Router();
 const { authenticateToken, requireCustomer, requireTasker } = require("../middleware/auth");
 const bookingController = require("../controllers/bookingController");
 const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getTaskerBookings } = require("../controllers/bookingController");
+const { cancelBooking } = require("../controllers/bookingCancelController");
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
 router.post("/", authenticateToken, requireCustomer, bookingController.createFromJobDescription);
@@ -26,5 +27,7 @@ router.patch('/:bookingId/final-price', authenticateToken, updateFinalPrice);
 
 // 6️⃣ Tasker xem danh sách bookings của mình
 router.get('/tasker/my', authenticateToken, requireTasker, getTaskerBookings);
+
+router.post("/:id/cancel", cancelBooking);
 
 module.exports = router;

@@ -6,18 +6,25 @@ async function computeBalance(pool, user_id) {
     .input("user_id", sql.Int, user_id)
     .query(`
       SELECT ISNULL(SUM(
-        CASE WHEN type='credit' THEN amount
-             WHEN type='debit' THEN -amount
-             ELSE 0 END
+        CASE 
+          WHEN type IN ('credit', 'refund', 'compensation') THEN amount
+          WHEN type = 'debit' THEN -amount
+          ELSE 0 
+        END
       ),0) AS balance
       FROM WalletTransactions
       WHERE user_id=@user_id
     `);
+  console.log("=== BE SQL RESULT ===", rs.recordset[0]);
   return Number(rs.recordset[0]?.balance || 0);
 }
 
 // GET /api/wallet/balance
 exports.getBalance = async (req, res) => {
+  console.log("=== BE DEBUG BALANCE CALLED ===");
+  console.log("req.user =", req.user);
+  console.log("Headers token =", req.headers.authorization);
+  console.log("===============================");
   try {
     const user_id = req.user?.user_id;
     if (!user_id) return res.status(401).json({ error: 'unauthorized' });
@@ -58,7 +65,7 @@ exports.payForBooking = async (req, res) => {
   let tx;
   try {
     const pool = await getPool();
-    console.log("✅ Connected to DB");  
+    console.log("✅ Connected to DB");
 
     // 1) Lấy booking và số tiền cần thanh toán
     const bRs = await pool.request()
@@ -70,11 +77,11 @@ exports.payForBooking = async (req, res) => {
           b.tasker_id,
           b.status,
           b.final_price,
-          b.expected_price
+          b.expected_price 
         FROM Bookings b
         WHERE b.booking_id = @booking_id
       `);
-      console.log("📦 Booking record:", bRs.recordset[0]);
+    console.log("📦 Booking record:", bRs.recordset[0]);
 
     const booking = bRs.recordset[0];
     if (!booking) {
@@ -127,7 +134,7 @@ exports.payForBooking = async (req, res) => {
         INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
         VALUES (@user_id, @amount, @type, @purpose, @related_id, @note, SYSUTCDATETIME());
       `);
-      console.log("✅ Insert done");
+    console.log("✅ Insert done");
 
     // 3.2) Cập nhật trạng thái booking = "Đã thanh toán"
     await reqTx
@@ -139,7 +146,7 @@ exports.payForBooking = async (req, res) => {
       `);
 
     await tx.commit();
-      console.log("✅ COMMIT DONE!");
+    console.log("✅ COMMIT DONE!");
 
     // 4) Trả về số dư mới
     const newBalance = currentBalance - toPay;

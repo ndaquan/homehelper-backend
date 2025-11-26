@@ -22,6 +22,10 @@ const SocketHandler = require("./socket/socketHandler");
 const { setIOInstance } = require("./controllers/conversationController");
 const { startNightlyBadgeJob } = require('./services/badge.nightly');
 
+const { autoCancelUnpaidBookings } = require("./jobs/autoCancelUnpaidBookings");
+setInterval(autoCancelUnpaidBookings, 5 * 60 * 1000);
+console.log("🕒 AutoCancel job running every 5 minutes...");
+
 // Khởi tạo Express app
 const app = express();
 const server = http.createServer(app);
