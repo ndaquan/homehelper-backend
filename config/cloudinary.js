@@ -122,6 +122,33 @@ const deleteFile = async (publicId, resourceType = 'image') => {
   }
 };
 
+// Helper: upload a raw Buffer to Cloudinary using upload_stream and return the result
+const uploadBufferToCloudinary = (buffer, options = {}) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      });
+      stream.end(buffer);
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+// Specialized helper for uploading badge icon to base/badges/<badgeId>
+const uploadBadgeIcon = async (buffer, badgeId, { transformation = [{ quality: 'auto' }], resource_type = 'image' } = {}) => {
+  if (!badgeId) throw new Error('badgeId is required for badge icon upload');
+  const folder = `${CLOUDINARY_FOLDER_BASE}/badges/${badgeId}`;
+  const result = await uploadBufferToCloudinary(buffer, {
+    folder,
+    resource_type,
+    transformation,
+  });
+  return result; // contains secure_url, public_id, etc.
+};
+
 // Helper: generate a short-lived signed URL for an authenticated asset
 // ttlSeconds default 3600 (1h). Cloudinary signed URLs are created via sign_url util.
 const generateSignedCertificateUrl = (publicId, { resource_type = 'image', ttlSeconds = 3600 } = {}) => {
@@ -157,6 +184,8 @@ module.exports = {
   memoryUpload,
   videoUpload,
   deleteFile,
+  uploadBufferToCloudinary,
+  uploadBadgeIcon,
   generateSignedCertificateUrl,
   getSecureVideoUrl,
 };
