@@ -1,5 +1,5 @@
-const { executeQuery, executeNonQuery } = require('../config/database');
-const bcrypt = require('bcryptjs');
+const { executeQuery, executeNonQuery } = require("../config/database");
+const bcrypt = require("bcryptjs");
 
 class User {
   // Lấy user theo ID
@@ -10,13 +10,13 @@ class User {
         FROM users 
         WHERE user_id = @userId
       `;
-      
+
       const result = await executeQuery(query, { userId });
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi tìm user: ${error.message}`);
@@ -27,17 +27,17 @@ class User {
   static async findByEmail(email) {
     try {
       const query = `
-        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, created_at, updated_at, is_banned
+        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, created_at, updated_at
         FROM users 
         WHERE email = @email
       `;
-      
+
       const result = await executeQuery(query, { email });
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi tìm user theo email: ${error.message}`);
@@ -47,7 +47,13 @@ class User {
   // Cập nhật user
   static async update(userId, updateData) {
     try {
-      const allowedFields = ['name', 'phone', 'cccd_status', 'cccd_verified_at', 'cccd_verified_by'];
+      const allowedFields = [
+        "name",
+        "phone",
+        "cccd_status",
+        "cccd_verified_at",
+        "cccd_verified_by",
+      ];
       const updates = [];
       const params = { userId };
 
@@ -60,19 +66,19 @@ class User {
       }
 
       if (updates.length === 0) {
-        throw new Error('Không có trường nào được cập nhật');
+        throw new Error("Không có trường nào được cập nhật");
       }
 
-      updates.push('updated_at = GETDATE()');
+      updates.push("updated_at = GETDATE()");
 
       const query = `
         UPDATE users 
-        SET ${updates.join(', ')}
+        SET ${updates.join(", ")}
         WHERE user_id = @userId
       `;
 
       await executeNonQuery(query, params);
-      
+
       return await this.findById(userId);
     } catch (error) {
       throw new Error(`Lỗi cập nhật user: ${error.message}`);
@@ -82,10 +88,7 @@ class User {
   // Cập nhật thông tin user từ CCCD đã xác minh
   static async updateFromCCCD(userId, cccdData) {
     try {
-      const {
-        full_name,
-        cccd_url
-      } = cccdData;
+      const { full_name, cccd_url } = cccdData;
 
       const query = `
         UPDATE users 
@@ -99,7 +102,7 @@ class User {
       `;
 
       await executeNonQuery(query, { full_name, cccd_url, userId });
-      
+
       return await this.findById(userId);
     } catch (error) {
       throw new Error(`Lỗi cập nhật user từ CCCD: ${error.message}`);
@@ -121,15 +124,14 @@ class User {
         WHERE u.user_id = @userId
         ORDER BY cv.created_at DESC
       `;
-      
+
       const result = await executeQuery(query, { userId });
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
-      return result.recordset[0];
 
+      return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi lấy thông tin user với CCCD: ${error.message}`);
     }
@@ -147,37 +149,37 @@ class User {
   // Tạo user mới
   static async create(userData) {
     try {
-      const { name, email, password, role = 'Customer', phone } = userData;
-      
+      const { name, email, password, role = "Customer", phone } = userData;
+
       // Hash password
       const hashedPassword = await bcrypt.hash(password, 10);
-      
+
       const query = `
         INSERT INTO users (name, email, password, role, phone, created_at, updated_at, is_banned)
         OUTPUT INSERTED.user_id, INSERTED.name, INSERTED.email, INSERTED.role, INSERTED.is_banned
         VALUES (@name, @email, @password, @role, @phone, GETDATE(), GETDATE(), 0)
       `;
-      
+
       const result = await executeQuery(query, {
         name,
         email,
         password: hashedPassword,
         role,
-        phone
+        phone,
       });
-      
+
       // Kiểm tra kết quả trả về
       if (result.recordset && result.recordset.length > 0) {
         return result.recordset[0];
       } else {
-        throw new Error('Không thể lấy thông tin user vừa tạo');
+        throw new Error("Không thể lấy thông tin user vừa tạo");
       }
     } catch (error) {
       throw new Error(`Lỗi tạo user: ${error.message}`);
     }
   }
 
-    static async search(searchQuery, limit = 10, excludeUserId = null) {
+  static async search(searchQuery, limit = 10, excludeUserId = null) {
     try {
       const params = [];
       let paramIndex = 1;
