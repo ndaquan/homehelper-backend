@@ -125,7 +125,7 @@ const Quote = {
   rejectOtherQuotesOfPost: async (postId, exceptQuoteId, transaction) => {
     const query = `
       UPDATE Quotes
-      SET status = N'Đã từ chối'
+      SET status = N'Từ chối'
       WHERE post_id = @param1 AND quote_id <> @param2 AND status = N'Chờ xử lý'
     `;
     await transaction.request()
