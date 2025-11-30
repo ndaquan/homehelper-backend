@@ -53,7 +53,7 @@ class BookingCancelController {
                 if (refundAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-           VALUES (@param1, @param2, N'refund', N'booking_cancel', @param3, @param4, GETDATE())`,
+                        VALUES (@param1, @param2, N'refund', N'booking_cancel', @param3, @param4, GETDATE())`,
                         [booking.customer_id, refundAmount, bookingId, `[${policy.ruleCode}] ${policy.note}`]
                     );
                 }
@@ -62,7 +62,7 @@ class BookingCancelController {
                 if (compensationAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-           VALUES (@param1, @param2, N'compensation', N'booking_cancel', @param3, @param4, GETDATE())`,
+                        VALUES (@param1, @param2, N'compensation', N'booking_cancel', @param3, @param4, GETDATE())`,
                         [booking.tasker_id, compensationAmount, bookingId, `[${policy.ruleCode}] ${policy.note}`]
                     );
                 }
@@ -72,7 +72,7 @@ class BookingCancelController {
             if (cancelledBy === "system" || cancelledBy === "no_show") {
                 await executeQuery(
                     `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-         VALUES (@param1, 0, N'system', @param2, @param3, @param4, GETDATE())`,
+                    VALUES (@param1, 0, N'system', @param2, @param3, @param4, GETDATE())`,
                     [
                         booking.customer_id,
                         cancelledBy === "system" ? "system_cancel" : "no_show",
@@ -84,23 +84,25 @@ class BookingCancelController {
 
             if (cancelledBy === "tasker" || cancelledBy === "tasker_late") {
                 // --- 1) Nếu khách chưa thanh toán: KHÔNG phạt ---
-                if (!booking.isPaid) {
+                if (!alreadyPaid) {
                     console.log("Tasker hủy nhưng khách chưa thanh toán → Không phạt.");
                     return;
                 }
 
-                // --- 2) Nếu khách đã thanh toán: Áp dụng phạt ---
-                let penalty = 0;
-
-                if (cancelledBy === "tasker") {
-                    penalty = -10; // hủy bình thường (>2h)
-                }
-
-                if (cancelledBy === "tasker_late") {
-                    penalty = -20; // hủy sát giờ (<2h)
-                }
-
+                // ⭐ Trừ điểm uy tín
+                let penalty = cancelledBy === "tasker" ? -10 : -20;
                 await updateReliabilityScore(booking.tasker_id, penalty);
+
+                // ⭐ Refund FULL cho khách
+                const refundAmount = booking.final_price || booking.expected_price || 0;
+
+                if (refundAmount > 0) {
+                    await executeQuery(
+                        `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
+                        VALUES (@param1, @param2, N'refund', N'tasker_cancel', @param3, N'Tasker hủy đơn', GETDATE())`,
+                        [booking.customer_id, refundAmount, bookingId]
+                    );
+                }
             }
 
 
