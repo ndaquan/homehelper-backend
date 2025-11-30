@@ -40,6 +40,7 @@ let avatarUpload = null;
 let postImagesUpload = null;
 // 3) Certificate upload (dynamic folder per user: <base>/certificates/<userId>)
 let certificateUpload = null;
+let taskPhotosUpload = null;
 
 if (CloudinaryStorage) {
   const avatarStorage = new CloudinaryStorage({
@@ -65,6 +66,21 @@ if (CloudinaryStorage) {
     },
   });
   postImagesUpload = multer({ storage: postImagesStorage });
+
+  const taskPhotosStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+      const userId =
+        (req.user && (req.user.userId || req.user.user_id)) || "anonymous";
+      return {
+        folder: `${CLOUDINARY_FOLDER_BASE}/task-photos/${userId}`,
+        allowed_formats: ["jpg", "jpeg", "png", "webp"],
+        resource_type: "image",
+      };
+      },
+  });
+
+  taskPhotosUpload = multer({ storage: taskPhotosStorage });
 
   const certificateStorage = new CloudinaryStorage({
     cloudinary,
@@ -102,10 +118,10 @@ const videoStorage = new CloudinaryStorage({
 const videoUpload = multer({
   storage: videoStorage,
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('video/')) {
+    if (file.mimetype.startsWith("video/")) {
       cb(null, true);
     } else {
-      cb(new Error('Only video files are allowed'), false);
+      cb(new Error("Only video files are allowed"), false);
     }
   },
   limits: {
@@ -119,6 +135,79 @@ const deleteFile = async (publicId, resourceType = 'image') => {
     return true;
   } catch (error) {
     throw new Error(`Failed to delete file from Cloudinary: ${error.message}`);
+  }
+};
+
+const handleTaskPhotosUpload = (photoType) => async (req, res) => {
+  try {
+    const taskId = req.params.taskId;
+    if (!req.files || req.files.length === 0) {
+      return res
+        .status(400)
+        .json({ success: false, message: "No files uploaded" });
+    }
+
+    const uploadedFiles = [];
+
+    if (taskPhotosUpload) {
+      // Nếu CloudinaryStorage, req.files đã có path
+      for (const file of req.files) {
+        const photoUrl = file.path; // URL Cloudinary
+        await executeQuery(
+          `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
+           VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
+          {
+            taskId,
+            photoUrl,
+            photoType,
+            uploadedBy: req.user.userId || req.user.user_id,
+          }
+        );
+        uploadedFiles.push(photoUrl);
+      }
+    } else {
+      // Fallback: upload manually via upload_stream
+      const userId = req.user.userId || req.user.user_id;
+      const folderBase = process.env.CLOUDINARY_FOLDER_BASE || "homehelper";
+      const folder = `${folderBase}/tasks/${taskId}`;
+
+      const uploads = await Promise.all(
+        req.files.map(
+          (file) =>
+            new Promise((resolve, reject) => {
+              const stream = cloudinary.uploader.upload_stream(
+                { folder, resource_type: "image" },
+                async (error, result) => {
+                  if (error) return reject(error);
+
+                  await db.query(
+                    `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
+                   VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
+                    {
+                      taskId,
+                      photoUrl: result.secure_url,
+                      photoType,
+                      uploadedBy: req.user.userId || req.user.user_id,
+                    }
+                  );
+
+                  resolve(result.secure_url);
+                }
+              );
+              stream.end(file.buffer);
+            })
+        )
+      );
+
+      uploadedFiles.push(...uploads);
+    }
+
+    res.json({ success: true, files: uploadedFiles });
+  } catch (err) {
+    console.error("Upload error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Upload failed", error: err.message });
   }
 };
 
@@ -148,6 +237,33 @@ const getSecureVideoUrl = (publicId) => {
     flags: ['attachment'],
   });
 };
+
+const uploadBufferToCloudinary = (buffer, options = {}) => {
+  return new Promise((resolve, reject) => {
+    try {
+      const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      });
+      stream.end(buffer);
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+// Specialized helper for uploading badge icon to base/badges/<badgeId>
+const uploadBadgeIcon = async (buffer, badgeId, { transformation = [{ quality: 'auto' }], resource_type = 'image' } = {}) => {
+  if (!badgeId) throw new Error('badgeId is required for badge icon upload');
+  const folder = `${CLOUDINARY_FOLDER_BASE}/badges/${badgeId}`;
+  const result = await uploadBufferToCloudinary(buffer, {
+    folder,
+    resource_type,
+    transformation,
+  });
+  return result; // contains secure_url, public_id, etc.
+};
+
 const noShowStorage = new CloudinaryStorage({
   cloudinary,
   params: async () => ({
@@ -157,6 +273,7 @@ const noShowStorage = new CloudinaryStorage({
 });
 
 const noShowUpload = multer({ storage: noShowStorage });
+
 module.exports = {
   cloudinary,
   // Prefer these if multer-storage-cloudinary is installed; otherwise use memoryUpload in routes

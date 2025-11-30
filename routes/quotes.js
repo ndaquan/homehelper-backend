@@ -21,6 +21,8 @@ router.get('/:quoteId', authenticateToken, requireAuth, quotesCtrl.getQuoteDetai
 // Customer chấp nhận/từ chối quote
 router.post('/:quoteId/accept', authenticateToken, requireAuth, quotesCtrl.acceptQuote);
 router.post('/:quoteId/reject', authenticateToken, requireAuth, quotesCtrl.rejectQuote);
+// Chấp nhận mới (status 'Chấp nhận') cho front-end /approve
+router.post('/:quoteId/approve', authenticateToken, requireAuth, quotesCtrl.approveQuote);
 // Negotiation: update proposed_price
 router.post('/:quoteId/price', authenticateToken, requireAuth, quotesCtrl.updateQuotePrice);
 

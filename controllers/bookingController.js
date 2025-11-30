@@ -146,6 +146,7 @@ class BookingController {
           v.variant_name, v.pricing_type, v.unit, v.price_min, v.price_max,
           uc.name AS customer_name, uc.email AS customer_email, uc.phone AS customer_phone,
           ut.name AS tasker_name, ut.email AS tasker_email, ut.phone AS tasker_phone,
+          tk.task_id,
           tk.description AS task_description,
           tk.checklist AS task_checklist
         FROM Bookings b

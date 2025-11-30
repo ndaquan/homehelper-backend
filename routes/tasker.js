@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const taskerController = require("../controllers/taskerController");
+const badgeController = require("../controllers/badgeController");
 const {
   authenticateToken,
   requireAuth,
@@ -112,4 +113,6 @@ router.get("/:id", taskerController.getById);
 // API endpoint: Lấy danh sách Tasker với khoảng cách
 router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
 router.get('/:taskerId/certifications', taskerController.getAllCertificationsOfTasker);
+// Huy hiệu đạt được của tasker
+router.get('/:id/badges', badgeController.getBadgesForTasker);
 module.exports = router;
