@@ -22,17 +22,18 @@ class BookingController {
         task
       } = req.body;
 
-      // ✅ Query chuẩn: status mặc định = 'Chờ xử lý'
+      const type = "Cơ bản";
+
       const query = `
         INSERT INTO Bookings (
           customer_id, tasker_id, service_id, variant_id,
           booking_time, start_time, end_time, location,
-          status, expected_price
+          status, expected_price, type
         )
         VALUES (
           @customer_id, @tasker_id, @service_id, @variant_id,
           GETDATE(), @start_time, @end_time, @location,
-          N'Chờ xử lý', @expected_price
+          N'Chờ xử lý', @expected_price, @type
         );
 
         SELECT SCOPE_IDENTITY() AS booking_id;
@@ -48,6 +49,7 @@ class BookingController {
         end_time,
         location,
         expected_price,
+        type,
       });
 
       // ✅ Lấy booking_id chính xác
@@ -137,7 +139,7 @@ class BookingController {
         SELECT 
           b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
           b.booking_time, b.start_time, b.end_time, b.location, b.status,
-          b.type, b.work_type, b.base_price, b.surcharge, b.final_price, b.expected_price,
+          b.type, b.base_price, b.surcharge, b.final_price, b.expected_price,
           t.status AS tasker_status,
           t.rating AS tasker_rating,
           s.name AS service_name,
@@ -196,8 +198,45 @@ class BookingController {
 
       if (booking) {
         if (status === "Hoàn thành" || status === "Completed") {
+
           console.log(`🎉 Cộng +5 điểm cho tasker ${booking.tasker_id}`);
           await updateReliabilityScore(booking.tasker_id, +5);
+
+          // ⭐ Lấy giá để trả cho tasker
+          const priceRes = await executeQuery(
+            `SELECT expected_price, final_price 
+            FROM Bookings 
+            WHERE booking_id = @param1`,
+            [id]
+          );
+
+          const { expected_price, final_price } = priceRes.recordset[0];
+
+          // Giá gốc tasker lẽ ra nhận
+          const rawAmount = final_price && final_price > 0
+            ? final_price
+            : expected_price;
+
+          // ❗ Trừ phí hệ thống 10%
+          const payoutAmount = rawAmount * 0.9;
+
+          console.log(`💰 Tasker ${booking.tasker_id} được nhận:`, payoutAmount);
+
+          // ⭐ Ghi transaction credit cho tasker
+          await executeQuery(
+            `INSERT INTO WalletTransactions 
+              (user_id, amount, type, purpose, related_id, note, created_at)
+            VALUES 
+              (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
+              N'Thanh toán cho tasker sau khi hoàn thành', SYSUTCDATETIME())`,
+            {
+              user_id: booking.tasker_id,
+              amount: payoutAmount,
+              booking_id: id,
+            }
+          );
+
+          console.log("💸 Đã ghi credit vào WalletTransactions!");
         }
       }
 

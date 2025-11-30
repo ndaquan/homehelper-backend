@@ -204,7 +204,6 @@ CREATE TABLE Bookings (
     status NVARCHAR(20) DEFAULT N'Chờ xử lý',
     type NVARCHAR(20) DEFAULT N'Cơ bản',
     shared BIT DEFAULT 0,
-    work_type NVARCHAR(10),
     base_price DECIMAL(10,2) NOT NULL DEFAULT 0,
     surcharge DECIMAL(10,2) NOT NULL DEFAULT 0,
     final_price AS (base_price + surcharge) PERSISTED,
@@ -601,7 +600,7 @@ VALUES
 (1, NULL, @UserID_Dung, @UserID_Hieu, N'Hợp đồng chăm sóc người già theo tháng, làm việc 8h/ngày', NULL, NULL, '2025-10-01 00:00:00', '2025-10-31 23:59:59', N'Chờ ký', '2025-09-05 10:00:00', NULL);
 
 -- Bookings
-INSERT INTO Bookings (booking_id, customer_id, tasker_id, service_id, variant_id, booking_time, start_time, end_time, location, status, type, shared, work_type, base_price, surcharge, points_earned, contract_id)
+INSERT INTO Bookings (booking_id, customer_id, tasker_id, service_id, variant_id, booking_time, start_time, end_time, location, status, type, shared, base_price, surcharge, points_earned, contract_id)
 VALUES
 (1, @UserID_Dung, @UserID_An, 1, 1, '2025-09-05 09:00:00', '2025-09-06 08:00:00', '2025-09-06 10:00:00', N'213 Hoài Thanh, Phường Mỹ An, Quận Ngũ Hành Sơn, Thành Phố Đà Nẵng', N'Chờ xử lý', N'Cơ bản', 0, NULL, 150.00, 0.00, 10, NULL),
 (2, @UserID_Dung, @UserID_Hieu, 4, 7, '2025-09-05 10:00:00', '2025-10-01 08:00:00', '2025-10-31 17:00:00', N'213 Hoài Thanh, Phường Mỹ An, Quận Ngũ Hành Sơn, Thành Phố Đà Nẵng', N'Chờ xử lý', N'Cơ bản', 0, NULL, 6000.00, 0.00, 50, 1);

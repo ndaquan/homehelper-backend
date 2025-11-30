@@ -12,7 +12,7 @@ function hoursUntil(startTimeISO) {
  */
 function calculateRefundPolicy(booking, cancelledBy) {
   // Tổng tiền làm căn cứ hoàn/bồi thường: nếu đã thanh toán dùng final_price, chưa thanh toán fallback expected_price.
-  const total = Number(booking.final_price ?? booking.expected_price ?? 0) || 0;
+  const total = Number(booking.final_price || booking.expected_price || 0);
 
   // R6: Khách không có mặt (no_show) = giống <4h (R4) nhưng yêu cầu bằng chứng ở tầng controller
   if (cancelledBy === "no_show") {
@@ -45,13 +45,13 @@ function calculateRefundPolicy(booking, cancelledBy) {
     };
   }
 
-  // R7: Hệ thống (thiên tai / lỗi kỹ thuật / auto cancel unpaid…)
-  if (cancelledBy === "system") {
+  // R7: Báo cáo bị từ chối – Tasker sai → Hoàn 100% cho khách, Tasker 0%
+  if (cancelledBy === "evidence_rejected") {
     return {
-      ruleCode: "R7",
+      ruleCode: "R8",
       refundPercent: 100,
       compensationPercent: 0,
-      note: "Hệ thống/technical force majeure",
+      note: "Báo cáo bị từ chối – Tasker cung cấp bằng chứng không hợp lệ",
       total,
     };
   }

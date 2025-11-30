@@ -148,6 +148,15 @@ const getSecureVideoUrl = (publicId) => {
     flags: ['attachment'],
   });
 };
+const noShowStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async () => ({
+    folder: `${CLOUDINARY_FOLDER_BASE}/evidence/no-show`,
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+  }),
+});
+
+const noShowUpload = multer({ storage: noShowStorage });
 module.exports = {
   cloudinary,
   // Prefer these if multer-storage-cloudinary is installed; otherwise use memoryUpload in routes
@@ -159,4 +168,5 @@ module.exports = {
   deleteFile,
   generateSignedCertificateUrl,
   getSecureVideoUrl,
+  noShowUpload,
 };
