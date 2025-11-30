@@ -29,7 +29,7 @@ exports.createQuote = async (req, res) => {
 
     // Prevent duplicates
     const existed = await Quote.findExistingForTasker(post_id, taskerId, variant_id);
-    if (existed && (existed.status === 'Chờ xử lý' || existed.status === 'Đã chấp nhận')) {
+    if (existed && (existed.status === 'Chờ xử lý' || existed.status === 'Chấp nhận')) {
       return res.status(409).json({ success:false, message: 'Bạn đã gửi báo giá cho bài viết này' });
     }
 
@@ -114,7 +114,7 @@ exports.acceptQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
     }
 
-    await Quote.updateQuoteStatus(quoteId, 'Đã chấp nhận', transaction);
+    await Quote.updateQuoteStatus(quoteId, 'Chấp nhận', transaction);
     await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
 
     await transaction.commit();
@@ -150,6 +150,7 @@ exports.approveQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
     }
 
+    // Status must satisfy DB CHECK constraint CHK_quote_status
     await Quote.updateQuoteStatus(quoteId, 'Chấp nhận', transaction);
     await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
 

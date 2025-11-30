@@ -18,7 +18,7 @@ class VideoController {
 
     // 1. DUYỆT TEXT
     const textCheck = await moderateVideoText(title, description);
-    const textStatus = textCheck.isSafe ? 'OK' : 'BAD';
+    const textStatus = textCheck.isSafe ? 'GOOD' : 'BAD';
     const textReason = textCheck.isSafe ? null : textCheck.reason.substring(0, 500);
 
     const videoUrl = req.file.path;

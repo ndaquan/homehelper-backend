@@ -15,6 +15,7 @@ const {
 } = require("../controllers/bookingController");
 const sessionController = require("../controllers/sessionController");
 const { taskPhotosUpload, memoryUpload } = require("../config/cloudinary");
+const { cancelBooking } = require("../controllers/bookingCancelController");
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
 router.post(
