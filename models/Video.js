@@ -114,7 +114,7 @@ static async getAllVideosForStaff(page = 1, limit = 5) {
       throw new Error(`Lỗi khi lấy tất cả video cho Staff: ${error.message}`);
     }
   }
-static async createVideo(userId, title, description, videoUrl, publicId, textStatus = 'OK', textReason = null) {
+static async createVideo(userId, title, description, videoUrl, publicId, textStatus = 'PENDING', textReason = null) {
   const query = `
     INSERT INTO Videos 
     (user_id, title, description, video_url, public_id, status, text_moderation_status, text_moderation_reason, uploaded_at)
@@ -133,7 +133,9 @@ static async createVideo(userId, title, description, videoUrl, publicId, textSta
 
   static async getVideoById(videoId) {
     const query = `
-      SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status, u.name AS expert, t.rating
+       SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status,
+             v.text_moderation_status, v.text_moderation_reason,
+             u.name AS expert, t.rating
       FROM Videos v
       JOIN Users u ON v.user_id = u.user_id
       LEFT JOIN Taskers t ON v.user_id = t.tasker_id

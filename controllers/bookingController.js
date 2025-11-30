@@ -136,7 +136,7 @@ class BookingController {
         SELECT 
           b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
           b.booking_time, b.start_time, b.end_time, b.location, b.status,
-          b.type, b.work_type, b.base_price, b.surcharge, b.final_price, b.expected_price,
+          b.type, b.base_price, b.surcharge, b.final_price, b.expected_price,
           t.status AS tasker_status,
           t.rating AS tasker_rating,
           s.name AS service_name,
@@ -176,15 +176,129 @@ class BookingController {
   // ============================================
   // 3️⃣ Tasker cập nhật trạng thái (Start / Reject / Complete)
   // ============================================
+  // ============================================
+  // Check if SOS booking is still available (tasker_id is NULL)
+  // ============================================
+  static async checkSosAvailability(req, res) {
+    try {
+      const { id } = req.params;
+
+      const query = `
+        SELECT booking_id, tasker_id, status, type
+        FROM Bookings
+        WHERE booking_id = @id AND type = N'SOS'
+      `;
+
+      const result = await executeQuery(query, { id });
+
+      if (result.recordset.length === 0) {
+        return res.json({ 
+          available: false, 
+          message: 'Không tìm thấy đơn SOS này' 
+        });
+      }
+
+      const booking = result.recordset[0];
+
+      // Check if tasker_id is NULL (available) and status is still "Chờ xử lý"
+      const isAvailable = booking.tasker_id === null && booking.status === 'Chờ xử lý';
+
+      if (isAvailable) {
+        res.json({ 
+          available: true, 
+          message: 'Đơn SOS còn khả dụng, bạn có thể nhận' 
+        });
+      } else {
+        res.json({ 
+          available: false, 
+          message: 'Đơn SOS này đã được người khác nhận rồi!',
+          takenBy: booking.tasker_id || 'unknown'
+        });
+      }
+    } catch (error) {
+      console.error("❌ Lỗi checkSosAvailability:", error);
+      res.status(500).json({ 
+        available: false, 
+        message: 'Có lỗi khi kiểm tra tính khả dụng của SOS' 
+      });
+    }
+  }
+
   static async updateStatus(req, res) {
     try {
       const { id } = req.params;
       const { status } = req.body;
 
-      await executeQuery(
-        `UPDATE Bookings SET status = @status WHERE booking_id = @id`,
-        { id, status }
-      );
+      // If a tasker accepts a booking (Đã chấp nhận) and booking.tasker_id is NULL,
+      // set the tasker_id to the current authenticated user.
+      const userId = req.user?.userId || null;
+      console.log(`[BOOKING] updateStatus called - booking_id: ${id}, status: ${status}, tasker_id: ${userId}`);
+
+      const query = `
+        BEGIN TRAN;
+        IF @status = N'Đã chấp nhận'
+        BEGIN
+          UPDATE Bookings
+          SET tasker_id = CASE WHEN tasker_id IS NULL THEN @userId ELSE tasker_id END,
+              status = @status
+          WHERE booking_id = @id;
+        END
+        ELSE
+        BEGIN
+          UPDATE Bookings SET status = @status WHERE booking_id = @id;
+        END
+        COMMIT;
+      `;
+
+      await executeQuery(query, { id, status, userId });
+      console.log(`[BOOKING] Status updated successfully for booking ${id}`);
+
+      // If status is "Đã chấp nhận" for an SOS booking, notify customer via socket
+      if (status === 'Đã chấp nhận') {
+        try {
+          console.log(`[BOOKING] Checking if booking ${id} is SOS type...`);
+          const bookingRes = await executeQuery(
+            `SELECT booking_id, customer_id, type, tasker_id FROM Bookings WHERE booking_id = @id`,
+            { id }
+          );
+
+          if (bookingRes.recordset && bookingRes.recordset.length > 0) {
+            const booking = bookingRes.recordset[0];
+            const isSOS = booking.type === 'SOS';
+            console.log(`[BOOKING] Booking type: ${booking.type}, isSOS: ${isSOS}`);
+
+            if (isSOS) {
+              const io = req.app.get('io');
+              if (io) {
+                console.log(`[BOOKING] Emitting sos_job_accepted to customer ${booking.customer_id}`);
+                
+                // Get tasker info
+                const taskerRes = await executeQuery(
+                  `SELECT user_id, name FROM Users WHERE user_id = @userId`,
+                  { userId }
+                );
+
+                const taskerName = taskerRes.recordset?.[0]?.name || 'Tasker';
+                const acceptedPayload = {
+                  booking_id: id,
+                  taken_by_tasker_id: userId,
+                  taken_by_name: taskerName,
+                  message: 'Tasker đã nhận công việc của bạn từ API'
+                };
+
+                // Broadcast to all users as fallback (customer might be on any page)
+                io.emit('sos_job_accepted', acceptedPayload);
+                console.log(`[BOOKING] Broadcasted sos_job_accepted:`, acceptedPayload);
+              } else {
+                console.warn(`[BOOKING] ❌ io instance not found in req.app`);
+              }
+            }
+          }
+        } catch (socketErr) {
+          console.error(`[BOOKING] ❌ Error emitting socket event:`, socketErr);
+          // Don't fail the API response due to socket error
+        }
+      }
 
       res.json({ success: true, message: `Cập nhật trạng thái: ${status}` });
     } catch (error) {
@@ -449,16 +563,116 @@ class BookingController {
       return res.status(500).json({ success: false, message: "Internal server error" });
     }
   }
+
+  // Get active SOS booking for customer (to show on page load)
+  static async getActiveSOSBooking(req, res) {
+    try {
+      const customerId = req.user.userId;
+
+      const query = `
+        SELECT TOP 1
+          b.booking_id,
+          b.customer_id,
+          b.tasker_id,
+          b.service_id,
+          b.variant_id,
+          b.start_time,
+          b.end_time,
+          b.location,
+          b.status,
+          b.type,
+          s.name AS service_name,
+          sv.variant_name,
+          b.expected_price,
+          b.final_price
+        FROM Bookings b
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
+        WHERE b.customer_id = @customerId
+          AND b.type = N'SOS'
+          AND (b.status = N'Chờ xử lý' OR b.status = N'Đã chấp nhận')
+        ORDER BY b.booking_time DESC
+      `;
+
+      const result = await executeQuery(query, { customerId });
+      const booking = result.recordset?.[0];
+
+      if (booking) {
+        return res.json({ success: true, data: booking });
+      } else {
+        return res.json({ success: true, data: null });
+      }
+    } catch (error) {
+      console.error("❌ Error getting active SOS booking:", error);
+      return res
+        .status(500)
+        .json({ success: false, message: "Internal server error" });
+    }
+  }
+  // Get active SOS jobs for tasker (only those not expired)
+  static async getActiveSosJobs(req, res) {
+    try {
+      const taskerId = req.user.userId;
+
+      const query = `
+        SELECT 
+          b.booking_id,
+          b.customer_id,
+          b.service_id,
+          b.variant_id,
+          b.booking_time,
+          b.start_time,
+          b.end_time,
+          b.location,
+          b.status,
+          b.base_price,
+          b.final_price,
+          b.expected_price,
+          b.type,
+          b.sos_expires_at,
+          u.name AS customer_name,
+          u.email AS customer_email,
+          u.phone AS customer_phone,
+          s.name AS service_name,
+          sv.variant_name,
+          t.description AS task_description,
+          t.checklist AS task_checklist
+        FROM Bookings b
+        LEFT JOIN Users u ON b.customer_id = u.user_id
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
+        LEFT JOIN Tasks t ON b.booking_id = t.booking_id
+        WHERE b.type = N'SOS'
+          AND b.status = N'Chờ xử lý'
+          AND b.sos_expires_at > GETDATE()
+          AND EXISTS (
+            SELECT 1 FROM TaskerServiceVariants tsv 
+            WHERE tsv.tasker_id = @taskerId 
+            AND tsv.variant_id = b.variant_id
+          )
+        ORDER BY b.sos_expires_at ASC
+      `;
+
+      const result = await executeQuery(query, { taskerId });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (error) {
+      console.error('❌ Error getting active SOS jobs:', error);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
 }
 
 module.exports = {
   createFromJobDescription: BookingController.createFromJobDescription,
   getBookingDetail: BookingController.getBookingDetail,
   updateStatus: BookingController.updateStatus,
+  checkSosAvailability: BookingController.checkSosAvailability,
   canRateTasker: BookingController.canRateTasker,
   listMyBookings: BookingController.listMyBookings,
   getBookingById: BookingController.getBookingById,
   getBookingDetails: BookingController.getBookingDetails,
   updateFinalPrice: BookingController.updateFinalPrice,
   getTaskerBookings: BookingController.getTaskerBookings,
+  getActiveSOSBooking: BookingController.getActiveSOSBooking,
+  getActiveSosJobs: BookingController.getActiveSosJobs,
 };
