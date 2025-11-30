@@ -8,6 +8,7 @@ const {
   forgotPassword, 
   resetPassword,
   verifyEmail,
+  updateProfile,
   loginWithGoogle
 } = require('../controllers/authController');
 const { authenticateToken } = require('../middleware/auth');
@@ -35,5 +36,8 @@ router.get('/me', authenticateToken, getCurrentUser);
 
 // POST /api/auth/change-password - Đổi password (cần xác thực)
 router.post('/change-password', authenticateToken, changePassword);
+
+// PUT /api/auth/profile - Cập nhật profile (cần xác thực)
+router.put('/profile', authenticateToken, updateProfile);
 
 module.exports = router;
