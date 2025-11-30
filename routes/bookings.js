@@ -71,6 +71,7 @@ router.patch(
   sessionController.updateSession
 );
 
-router.post("/:id/cancel", cancelBooking);
+// TODO: Implement cancelBooking function in bookingController if needed
+// router.post("/:id/cancel", authenticateToken, bookingController.cancelBooking);
 
 module.exports = router;

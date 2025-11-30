@@ -23,16 +23,15 @@ router.get('/address', authenticateToken, requireAuth, taskerController.getAddre
 router.put('/address/:address_id', authenticateToken, requireAuth, taskerController.updateAddress);
 router.delete('/address/:address_id', authenticateToken, requireAuth, taskerController.deleteAddress);
 
-router.get("/:id/services", taskerController.getWithServices);
-
-// API endpoint: Lấy danh sách Tasker với khoảng cách
+// API endpoint: Lấy danh sách Tasker với khoảng cách (MUST be before /:id routes)
 router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
 router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
 
+// Specific routes with :id parameter (must be before generic /:id)
+router.get("/:id/services", taskerController.getWithServices);
+
 // Certifications & Upgrade
-// API endpoint: Lấy danh sách variant_id đã đăng ký của tasker
-router.get('/:id/registered-variants', taskerController.getRegisteredVariantIds);
 // API endpoint: Lấy danh sách chứng chỉ đang pending cho staff duyệt
 
 router.post('/certifications/approve', authenticateToken, requireStaff, taskerController.approveCertificationAndRegisterService);
@@ -109,10 +108,11 @@ router.get(
 // 	}
 // 	return taskerController.getById(req, res, next);
 // });
-router.get("/:id", taskerController.getById);
-// API endpoint: Lấy danh sách Tasker với khoảng cách
-router.post('/taskers-with-distance', authenticateToken, taskerController.getTaskersWithDistance);
+// Specific routes with :id parameter (must be before generic /:id)
+router.get('/:id/registered-variants', taskerController.getRegisteredVariantIds);
 router.get('/:taskerId/certifications', taskerController.getAllCertificationsOfTasker);
-// Huy hiệu đạt được của tasker
 router.get('/:id/badges', badgeController.getBadgesForTasker);
+
+// Generic tasker by id - MUST be last to avoid matching other routes
+router.get("/:id", taskerController.getById);
 module.exports = router;
