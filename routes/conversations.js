@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { ConversationController } = require('../controllers/conversationController');
 const { authenticateToken } = require('../middleware/auth');
+const { chatImageUpload } = require('../config/cloudinary');
 const multer = require('multer');
 
 // Cấu hình multer cho upload file
@@ -42,7 +43,11 @@ router.delete('/:conversationId/participants/:participantId', ConversationContro
 
 // Routes cho messages
 router.get('/:conversationId/messages', ConversationController.getMessages);
-router.post('/:conversationId/messages', upload.single('file'), ConversationController.sendMessage);
+router.post(
+  '/:conversationId/messages',
+  chatImageUpload.array('images', 10), 
+  ConversationController.sendMessage
+);
 router.get('/:conversationId/messages/search', ConversationController.searchMessages);
 
 // Routes cho read status

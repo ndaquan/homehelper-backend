@@ -21,7 +21,7 @@ async function moderateAndUpdateVideo(videoId, publicId) {
     let finalStatus = 'Pending';
     if (!moderation.isSafe) {
       finalStatus = 'Rejected';
-    } else if (video.text_moderation_status === 'OK') {
+    } else if (video.text_moderation_status === 'GOOD') {
       finalStatus = 'Approved';
     }
 
