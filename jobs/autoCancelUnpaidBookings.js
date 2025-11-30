@@ -6,7 +6,7 @@ async function autoCancelUnpaidBookings() {
   try {
     const result = await executeQuery(`
       UPDATE Bookings
-      SET status = N'Hủy',
+      SET status = N'Hủy'
       OUTPUT INSERTED.booking_id, INSERTED.customer_id, INSERTED.status
       WHERE status IN (N'Chờ xử lý', N'Pending')
         AND DATEDIFF(MINUTE, booking_time, GETDATE()) > 30;

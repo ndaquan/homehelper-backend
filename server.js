@@ -103,6 +103,7 @@ app.use("/api/quotes", require("./routes/quotes"));
 app.use("/api/videos", require("./routes/videoRoutes"));
 app.use("/api/negotiations", require("./routes/negotiations"));
 app.use("/api/badges", require("./routes/badges"));
+app.use("/api/evidence", require("./routes/evidence"))
 // app.use('/api/users', require('./routes/users'));
 // app.use('/api/bookings', require('./routes/bookings'));
 // app.use('/api/posts', require('./routes/posts'));
