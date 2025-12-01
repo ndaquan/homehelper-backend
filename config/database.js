@@ -6,7 +6,7 @@ const dbConfig = {
   server: process.env.DB_SERVER || "localhost",
   database: process.env.DB_DATABASE || "HomeHelperDB",
   user: process.env.DB_USER || "sa",
-  password: process.env.DB_PASSWORD || "123456789",
+  password: process.env.DB_PASSWORD || "123456",
   port: parseInt(process.env.DB_PORT || "1433", 10),
   options: {
     encrypt: false, // Nếu dùng Azure thì để true

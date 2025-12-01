@@ -1,7 +1,7 @@
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const Notification = require('../models/Notification');
-
+const { moderateAndBlurImage } = require('../services/sightengine.service');
 // Lưu trữ io instance để emit events
 let ioInstance = null;
 
@@ -81,7 +81,7 @@ class ConversationController {
   static async getConversations(req, res) {
     try {
       const userId = req.user.user_id || req.user.userId;
-      
+
       const pageRaw = req.query.page;
       const limitRaw = req.query.limit;
       const page = Number.isInteger(pageRaw) ? pageRaw : parseInt(pageRaw, 10);
@@ -91,7 +91,7 @@ class ConversationController {
       const safeLimit = Number.isNaN(limit) || limit < 1 ? 20 : limit;
 
       const result = await Conversation.findByUserId(userId, safePage, safeLimit);
-      
+
 
       res.status(200).json({
         message: 'Lấy danh sách cuộc trò chuyện thành công',
@@ -329,9 +329,9 @@ class ConversationController {
       }
 
       const result = await Message.findByConversationId(
-        convId, 
-        parseInt(page), 
-        parseInt(limit), 
+        convId,
+        parseInt(page),
+        parseInt(limit),
         beforeMessageId
       );
 
@@ -348,101 +348,119 @@ class ConversationController {
   }
 
   // Gửi tin nhắn
-  static async sendMessage(req, res) {
-    try {
-      console.log('📤 sendMessage called with:', {
-        params: req.params,
-        body: req.body,
-        file: req.file,
-        user: req.user
-      });
-      
-      const { conversationId } = req.params;
-      const convId = parseInt(conversationId, 10);
-      if (Number.isNaN(convId)) {
-        return res.status(400).json({ error: 'conversationId không hợp lệ' });
-      }
-      const userId = req.user.user_id || req.user.userId;
-  const { content, message_type = 'text' } = req.body;
+ static async sendMessage(req, res) {
+  try {
+    const { conversationId } = req.params;
+    const convId = parseInt(conversationId, 10);
+    if (Number.isNaN(convId)) {
+      return res.status(400).json({ error: 'conversationId không hợp lệ' });
+    }
 
-      // Kiểm tra user có trong cuộc trò chuyện không
-      const isParticipant = await Conversation.isParticipant(convId, userId);
-      if (!isParticipant) {
-        return res.status(403).json({
-          error: 'Bạn không có quyền gửi tin nhắn trong cuộc trò chuyện này'
-        });
-      }
+    const userId = req.user.user_id || req.user.userId;
+    const { content } = req.body;
+    const uploadedImages = req.files || [];
 
-      let messageData = {
+    const isParticipant = await Conversation.isParticipant(convId, userId);
+    if (!isParticipant) {
+      return res.status(403).json({ error: 'Không có quyền gửi tin nhắn' });
+    }
+
+    const hasCaption = content && content.trim() !== '';
+    const imageCount = uploadedImages.length;
+    let finalContent = hasCaption ? content.trim() : null;
+
+    if (!hasCaption && imageCount > 0) {
+      finalContent = imageCount === 1 ? 'Đã gửi một hình ảnh' : `Đã gửi ${imageCount} hình ảnh`;
+    }
+
+    if (imageCount === 0 && !hasCaption) {
+      return res.status(400).json({ error: 'Tin nhắn không được để trống' });
+    }
+
+    const createdMessages = [];
+
+    // XỬ LÝ ẢNH – ĐÃ FIX HOÀN TOÀN
+    if (imageCount > 0) {
+      for (const file of uploadedImages) {
+        const publicId = file.filename;
+        const moderation = await moderateAndBlurImage(publicId);
+
+        // LOG PII NẾU CÓ
+        if (moderation.detections?.personalPII?.length > 0) {
+          console.log('PII Detected:', moderation.detections.personalPII);
+        }
+
+        // DÙNG URL ĐÃ BLUR NẾU CÓ PII/FACE/NUDITY
+        const finalImageUrl = moderation.blurred ? moderation.url : moderation.originalUrl;
+
+        const messageData = {
+          conversation_id: convId,
+          sender_id: userId,
+          content: finalContent,
+          message_type: 'image',
+          file_url: finalImageUrl,                    // ← ẢNH ĐÃ BỊ BLUR Ở ĐÂY
+          original_file_url: moderation.originalUrl,
+          file_name: file.originalname,
+          file_size: file.size,
+          public_id: file.filename,
+          is_blurred: moderation.blurred,
+          moderation_data: JSON.stringify(moderation.detections),
+        };
+
+        const message = await Message.create(messageData);
+        createdMessages.push(message);
+      }
+    }
+    // Gửi text thường
+    else {
+      const messageData = {
         conversation_id: convId,
         sender_id: userId,
-        content: content ? content.trim() : '',
-        message_type
+        content: finalContent,
+        message_type: 'text',
       };
-
-      // Nếu có file được upload
-      if (req.file) {
-        const file = req.file;
-        messageData.message_type = file.mimetype.startsWith('image/') ? 'image' : 'file';
-        messageData.file_url = `/uploads/${file.filename}`;
-        messageData.file_name = file.originalname;
-        messageData.file_size = file.size;
-        
-        // Nếu không có content, tạo content mặc định
-        if (!messageData.content) {
-          messageData.content = `Đã gửi ${messageData.message_type === 'image' ? 'hình ảnh' : 'file'}: ${file.originalname}`;
-        }
-      } else {
-        // Validate input cho tin nhắn text
-        if (!content || content.trim().length === 0) {
-          return res.status(400).json({
-            error: 'Nội dung tin nhắn không được để trống'
-          });
-        }
-      }
-
       const message = await Message.create(messageData);
+      createdMessages.push(message);
+    }
 
-      // Lấy danh sách participants để gửi thông báo
-      const conversation = await Conversation.findById(convId);
-      const otherParticipants = conversation.participants
-        .filter(p => p.user_id !== userId)
-        .map(p => p.user_id);
+    // Emit + Notification (giữ nguyên)
+    const conversation = await Conversation.findById(convId);
+    const otherParticipants = conversation.participants
+      .filter(p => p.user_id !== userId)
+      .map(p => p.user_id);
 
-      // Emit real-time message once to the conversation room
-      if (ioInstance) {
-        ioInstance.to(`conversation_${conversationId}`).emit('new_message', {
-          message,
-          conversationId
+    if (ioInstance) {
+      createdMessages.forEach(msg => {
+        ioInstance.to(`conversation_${convId}`).emit('new_message', {
+          message: msg,
+          conversationId: convId
         });
-      }
-
-      // Tạo thông báo cho các participants khác
-      for (const participantId of otherParticipants) {
-        try {
-          await Notification.createMessageNotification(
-            convId,
-            userId,
-            participantId,
-            messageData.content
-          );
-        } catch (notificationError) {
-          console.error('Lỗi tạo thông báo:', notificationError);
-        }
-      }
-
-      res.status(201).json({
-        message: 'Gửi tin nhắn thành công',
-        data: message
-      });
-    } catch (error) {
-      console.error('Lỗi gửi tin nhắn:', error);
-      res.status(500).json({
-        error: error.message
       });
     }
-  }
 
+    const notificationText = hasCaption
+      ? content.trim()
+      : (imageCount === 1 ? 'đã gửi một hình ảnh' : `đã gửi ${imageCount} hình ảnh`);
+
+    for (const participantId of otherParticipants) {
+      await Notification.createMessageNotification(
+        convId,
+        userId,
+        participantId,
+        notificationText
+      ).catch(console.error);
+    }
+
+    return res.status(201).json({
+      message: 'Gửi tin nhắn thành công',
+      data: createdMessages.length === 1 ? createdMessages[0] : createdMessages
+    });
+
+  } catch (error) {
+    console.error('Lỗi gửi tin nhắn:', error);
+    return res.status(500).json({ error: error.message || 'Lỗi server' });
+  }
+}
   // Tìm kiếm tin nhắn
   static async searchMessages(req, res) {
     try {
