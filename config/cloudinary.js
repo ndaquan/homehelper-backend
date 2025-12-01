@@ -342,4 +342,6 @@ module.exports = {
   getSecureVideoUrl,
   memoryUpload,
   noShowUpload,
+  handleTaskPhotosUpload,
+  uploadBadgeIcon,
 };
