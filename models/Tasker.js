@@ -170,6 +170,7 @@ class Tasker {
       const taskersMap = {};
       rows.forEach((row) => {
         if (!taskersMap[row.tasker_id]) {
+          const score = row.reliability_score || 0;
           taskersMap[row.tasker_id] = {
             tasker_id: row.tasker_id,
             name: row.tasker_name,
