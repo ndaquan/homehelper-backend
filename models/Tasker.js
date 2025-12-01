@@ -153,7 +153,7 @@ class Tasker {
     console.log("📌 [Stack]\n", new Error().stack);
 
     // 👇 DÙNG ENUM ĐÚNG VỚI DATABASE
-    const ALLOWED = ["Hoạt động", "Không hoạt động", "Bị chặn"];
+    const ALLOWED = ["Active", "Inactive", "Banned"];
 
     if (!ALLOWED.includes(status)) {
       console.error("❌ [ERROR] Status KHÔNG hợp lệ:", status);
