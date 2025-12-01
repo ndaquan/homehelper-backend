@@ -133,10 +133,9 @@ static async createVideo(userId, title, description, videoUrl, publicId, textSta
 
   static async getVideoById(videoId) {
     const query = `
-       SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status,
-             v.text_moderation_status, v.text_moderation_reason,
-             u.name AS expert, t.rating
-      FROM Videos v
+      SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status,
+                  v.text_moderation_status, v.text_moderation_reason,
+                  u.name AS expert, t.rating      FROM Videos v
       JOIN Users u ON v.user_id = u.user_id
       LEFT JOIN Taskers t ON v.user_id = t.tasker_id
       WHERE v.video_id = @param1 AND v.is_deleted = 0

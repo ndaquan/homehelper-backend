@@ -59,6 +59,9 @@ exports.getPendingCertifications = async (req, res) => {
           tc.cert_public_id,
           tc.cert_name AS certificate_name,
           tc.created_at AS registered_at,
+          tc.issued_date,
+          tc.parsed_holder_name,
+          tc.parsed_certificate_code,
           tc.tasker_id,
           u.name AS tasker_name,
           tc.variant_ids_json,
@@ -104,22 +107,56 @@ exports.getPendingCertifications = async (req, res) => {
 exports.createPendingCertification = async (req, res) => {
   try {
     const userId = req.user.userId || req.user.user_id;
-  const { service_id, variant_ids = [], cert_ids = [], certs = [], status = 'pending' } = req.body;
-  // Ensure variant_ids is always an array of numbers
-  let variantArr = Array.isArray(variant_ids) ? variant_ids : [];
-  if (typeof variant_ids === 'string' && variant_ids.trim()) {
-    try {
-      variantArr = JSON.parse(variant_ids);
-      if (!Array.isArray(variantArr)) {
+    const { service_id, variant_ids = [], cert_ids = [], certs = [], status = 'pending' } = req.body;
+
+    // Normalize variant_ids into array of integers
+    let variantArr = Array.isArray(variant_ids) ? variant_ids : [];
+    if (typeof variant_ids === 'string' && variant_ids.trim()) {
+      try {
+        variantArr = JSON.parse(variant_ids);
+        if (!Array.isArray(variantArr)) {
+          variantArr = variant_ids.split(',').map(v => parseInt(v.trim(), 10)).filter(Number.isFinite);
+        }
+      } catch {
         variantArr = variant_ids.split(',').map(v => parseInt(v.trim(), 10)).filter(Number.isFinite);
       }
-    } catch {
-      variantArr = variant_ids.split(',').map(v => parseInt(v.trim(), 10)).filter(Number.isFinite);
     }
-  }
-    if (!service_id || !Array.isArray(cert_ids) || cert_ids.length === 0) {
-      return res.status(400).json({ success: false, message: 'Thiếu service_id hoặc danh sách cert_ids' });
+    variantArr = variantArr.map(v => parseInt(v, 10)).filter(Number.isFinite);
+
+    // Basic service_id validation
+    if (!service_id) {
+      return res.status(400).json({ success: false, message: 'Thiếu service_id' });
     }
+
+    // If no certificates provided, check whether this service actually requires them.
+    if (!Array.isArray(cert_ids) || cert_ids.length === 0) {
+      try {
+        const svcResult = await executeQuery('SELECT requires_certificate, name FROM Services WHERE service_id = @param1', [service_id]);
+        const svcRow = svcResult.recordset && svcResult.recordset[0];
+        const requiresCert = !!(svcRow && (svcRow.requires_certificate === true || svcRow.requires_certificate === 1));
+        if (!requiresCert) {
+          // Service does NOT require certificate: directly register variants if any, skip cert creation
+          if (Array.isArray(variantArr) && variantArr.length) {
+            for (const vid of variantArr) {
+              try {
+                await TaskerServiceVariants.add(userId, vid);
+              } catch (eAdd) {
+                // Ignore duplicate or failed insert silently, continue others
+                if (process.env.NODE_ENV !== 'production') {
+                  console.warn('[createPendingCertification] Ignore add variant error:', eAdd.message);
+                }
+              }
+            }
+          }
+          return res.json({ success: true, created: [], status: 'registered', message: 'Đăng ký dịch vụ không yêu cầu chứng chỉ thành công', service_id, variant_ids: variantArr });
+        }
+      } catch (svcErr) {
+        return res.status(400).json({ success: false, message: 'Không thể xác định yêu cầu chứng chỉ của dịch vụ', error: svcErr.message });
+      }
+      // Service requires certificate but none provided
+      return res.status(400).json({ success: false, message: 'Dịch vụ yêu cầu chứng chỉ: vui lòng upload ít nhất 1 chứng chỉ (cert_ids trống)' });
+    }
+
     let created = [];
     for (const cert_public_id of cert_ids) {
       // Tìm object chứng chỉ từ danh sách certs FE gửi lên
@@ -965,12 +1002,12 @@ exports.approveTaskerApplication = async (req, res) => {
     // 2. Insert Taskers row if missing
     const existsTasker = await executeQuery("SELECT tasker_id FROM Taskers WHERE tasker_id=@param1", [app.user_id]);
     if (!existsTasker.recordset.length) {
-      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
+      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Active', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
     }
     // 3. Variants linking
     if (Array.isArray(app.variants) && app.variants.length) {
       for (const variantId of app.variants) {
-        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_service_variant_id, tasker_id, variant_id) VALUES ((SELECT ISNULL(MAX(tasker_service_variant_id),0)+1 FROM TaskerServiceVariants), @param1, @param2)", [app.user_id, variantId]);
+        await executeQuery("IF NOT EXISTS (SELECT 1 FROM TaskerServiceVariants WHERE tasker_id=@param1 AND variant_id=@param2) INSERT INTO TaskerServiceVariants (tasker_id, variant_id) VALUES (@param1, @param2)", [app.user_id, variantId]);
       }
     }
     // 4. Persist certificates into TaskerCertifications if any not already persisted (looking for cert_id absence)
@@ -1405,6 +1442,45 @@ exports.createCertification = async (req, res) => {
           } catch (clsErr) { console.warn('Service classification failed', clsErr.message); }
         }
         if (aiServiceMismatchBlock) {
+          // Heuristic override: if certificate text clearly relates to the selected service via synonyms, don't block
+          try {
+            const svcNameRes = await executeQuery('SELECT name FROM Services WHERE service_id = @param1', [service_id]);
+            const serviceName = (svcNameRes.recordset && svcNameRes.recordset.length) ? (svcNameRes.recordset[0].name || '') : '';
+            const norm = s => (s||'').toString().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[^a-z0-9]+/g,' ').trim();
+            const serviceTokens = norm(serviceName).split(' ').filter(Boolean);
+            const synonyms = {
+              'dieu hoa': [
+                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh', 'air conditioning', 'dien lanh', 'điện lạnh',
+                'sua dieu hoa', 'sua chua dieu hoa', 'sua chua may lanh', 'sua chua dien lanh', 'bao tri dieu hoa', 'bao tri may lanh',
+                'dien dan dung', 'sua chua dien dan dung', 'dien gia dung', 'sua chua dien gia dung', 'sua chua dien', 'tho dien'
+              ],
+              'cham soc nguoi cao tuoi': [
+                'cham soc nguoi cao tuoi', 'nguoi cao tuoi', 'elderly care', 'elderly',
+                'old people', 'cham soc', 'cham soc nguoi gia', 'nguoi gia'
+              ],
+              'nau an': [
+                'nau an', 'nau mon', 'lam mon an', 'am thuc', 'hoc nau an', 'day nau an',
+                'khoa hoc nau an', 'lop hoc nau an', 'mon an', 'mon ngon', 'chef', 'cook',
+                'cooking', 'culinary', 'culinary arts', 'cooking class', 'cooking course',
+                'food preparation', 'recipe', 'dish', 'cuisine', 'baking', 'pastry'
+              ]
+            };
+            let expandedServiceTokens = new Set(serviceTokens);
+            for (const key in synonyms) {
+              if (norm(serviceName).includes(key)) {
+                for (const w of synonyms[key]) expandedServiceTokens.add(norm(w));
+              }
+            }
+            const certText = [parsed.cert_name, parsed.issued_by, parsed.holder_name, parsed.level_or_grade].filter(Boolean).join(' ');
+            const certNorm = norm(certText);
+            let matchCount = 0;
+            for (const token of expandedServiceTokens) { if (!token || token.length < 3) continue; if (certNorm.includes(token)) matchCount++; }
+            if (matchCount > 0) {
+              aiServiceMismatchBlock = false;
+            }
+          } catch(_) {}
+        }
+        if (aiServiceMismatchBlock) {
           return res.status(400).json({ success:false, ai_service_mismatch:true, message:'Chứng chỉ không thuộc nhóm dịch vụ đã chọn', ai_detected_service: aiDetectedService, ai_service_score: aiServiceScore });
         }
         // Duplicate check
@@ -1448,7 +1524,7 @@ exports.createCertification = async (req, res) => {
           }
         }
         if (isDuplicate) {
-          return res.status(409).json({ success:false, duplicate:true, message: `Chứng chỉ đã tồn tại (cert_id=${duplicateCertId}) - ${duplicateReason}` });
+          return res.status(409).json({ success:false, duplicate:true, message: `Chứng chỉ đã tồn tại trong hệ thống. Bạn không được phép dùng chứng chỉ này!` });
         }
         // Service vs variant validation
         let serviceMismatch = false; let allowedServiceIds = [];
@@ -1473,7 +1549,9 @@ exports.createCertification = async (req, res) => {
             const serviceTokens = norm(serviceName).split(' ').filter(Boolean);
             const synonyms = {
               'dieu hoa': [
-                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh'
+                'dieu hoa', 'may lanh', 'air', 'aircon', 'airconditioner', 'hvac', 'lanh', 'air conditioning', 'dien lanh', 'điện lạnh',
+                'sua dieu hoa', 'sua chua dieu hoa', 'sua chua may lanh', 'sua chua dien lanh', 'bao tri dieu hoa', 'bao tri may lanh',
+                'dien dan dung', 'sua chua dien dan dung', 'dien gia dung', 'sua chua dien gia dung', 'sua chua dien', 'tho dien'
               ],
               'cham soc nguoi cao tuoi': [
                 'cham soc nguoi cao tuoi', 'nguoi cao tuoi', 'elderly care', 'elderly',
@@ -1488,7 +1566,7 @@ exports.createCertification = async (req, res) => {
             };
             let expandedServiceTokens = new Set(serviceTokens);
             for (const key in synonyms) {
-              if (norm(serviceName).includes(key)) { for (const w of synonyms[key]) expandedServiceTokens.add(norm(w)); }
+              if (serviceTokens.some(t => key.includes(t) || t.includes(key))) { for (const w of synonyms[key]) expandedServiceTokens.add(norm(w)); }
             }
             const certText = [parsed.cert_name, parsed.issued_by, parsed.holder_name, parsed.level_or_grade].filter(Boolean).join(' ');
             const certNorm = norm(certText);
@@ -1497,7 +1575,7 @@ exports.createCertification = async (req, res) => {
             if (matchCount === 0 && requiresCert) { serviceContentMismatch = true; contentReason = 'Không tìm thấy từ khóa liên quan đến dịch vụ trong chứng chỉ'; }
             else if (matchCount === 0) {
               const elderlyWords = ['nguoi cao tuoi','elderly','cham soc nguoi cao tuoi','cham soc'];
-              const hvacWords = ['dieu hoa','may lanh','airconditioner','hvac'];
+              const hvacWords = ['dieu hoa','may lanh','airconditioner','hvac', 'dien lanh','dien dan dung','dien gia dung','tho dien'];
               const inElderly = elderlyWords.some(w=>certNorm.includes(w));
               const inHVAC = hvacWords.some(w=>certNorm.includes(w));
               if (inElderly && serviceTokens.some(t=>['dieu','hoa','dieu hoa','may lanh'].includes(t))) { serviceContentMismatch = true; contentReason = 'Nội dung chứng chỉ thuộc lĩnh vực chăm sóc người già'; }

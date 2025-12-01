@@ -1,4 +1,4 @@
-const { executeQuery, getPool } = require('../config/database');
+const { executeQuery, getPool, sql } = require('../config/database');
 const Quote = require('../models/Quotes');
 
 const getTaskerIdByUserId = async (userId) => {
@@ -29,11 +29,11 @@ exports.createQuote = async (req, res) => {
 
     // Prevent duplicates
     const existed = await Quote.findExistingForTasker(post_id, taskerId, variant_id);
-    if (existed && (existed.status === 'Chờ xử lý' || existed.status === 'Đã chấp nhận')) {
+    if (existed && (existed.status === 'Chờ xử lý' || existed.status === 'Chấp nhận')) {
       return res.status(409).json({ success:false, message: 'Bạn đã gửi báo giá cho bài viết này' });
     }
 
-    // Strict price validation against ServiceVariants
+    // Price validation against ServiceVariants (only min/max)
     const vRes = await executeQuery(
       `SELECT price_min, price_max FROM ServiceVariants WHERE variant_id = @param1`,
       [variant_id]
@@ -93,7 +93,7 @@ exports.getMyQuoteForPost = async (req, res) => {
 
 exports.acceptQuote = async (req, res) => {
   const pool = await getPool();
-  const transaction = new pool.Transaction();
+  const transaction = new sql.Transaction(pool); // FIX: use sql.Transaction instead of pool.Transaction
   try {
     await transaction.begin();
 
@@ -114,7 +114,7 @@ exports.acceptQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
     }
 
-    await Quote.updateQuoteStatus(quoteId, 'Đã chấp nhận', transaction);
+    await Quote.updateQuoteStatus(quoteId, 'Chấp nhận', transaction);
     await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
 
     await transaction.commit();
@@ -126,9 +126,46 @@ exports.acceptQuote = async (req, res) => {
   }
 };
 
+// Approve quote (status 'Chấp nhận') – tương tự accept nhưng dùng chuỗi khác để hiển thị trên UI
+exports.approveQuote = async (req, res) => {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  try {
+    await transaction.begin();
+
+    const requesterId = req.user?.userId || req.user?.user_id;
+    const { quoteId } = req.params;
+
+    const quote = await Quote.findQuoteById(quoteId);
+    if (!quote) {
+      await transaction.rollback();
+      return res.status(404).json({ success:false, message: 'Quote không tồn tại' });
+    }
+    if (quote.customer_id !== requesterId) {
+      await transaction.rollback();
+      return res.status(403).json({ success:false, message: 'Không có quyền chấp nhận quote này' });
+    }
+    if (quote.status !== 'Chờ xử lý') {
+      await transaction.rollback();
+      return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
+    }
+
+    // Status must satisfy DB CHECK constraint CHK_quote_status
+    await Quote.updateQuoteStatus(quoteId, 'Chấp nhận', transaction);
+    await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
+
+    await transaction.commit();
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('approveQuote error', err);
+    try { await transaction.rollback(); } catch (_) {}
+    return res.status(500).json({ success:false, message: 'Lỗi server' });
+  }
+};
+
 exports.rejectQuote = async (req, res) => {
   const pool = await getPool();
-  const transaction = new pool.Transaction();
+  const transaction = new sql.Transaction(pool); // FIX: use sql.Transaction instead of pool.Transaction
   try {
     await transaction.begin();
 
@@ -149,7 +186,7 @@ exports.rejectQuote = async (req, res) => {
       return res.status(409).json({ success:false, message: 'Quote đã được xử lý' });
     }
 
-    await Quote.updateQuoteStatus(quoteId, 'Đã từ chối', transaction);
+    await Quote.updateQuoteStatus(quoteId, 'Từ chối', transaction);
     await transaction.commit();
     return res.json({ success: true });
   } catch (err) {
