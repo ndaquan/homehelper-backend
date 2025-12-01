@@ -286,4 +286,6 @@ module.exports = {
   generateSignedCertificateUrl,
   getSecureVideoUrl,
   noShowUpload,
+  handleTaskPhotosUpload,
+  uploadBadgeIcon,
 };
