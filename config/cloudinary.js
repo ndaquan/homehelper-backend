@@ -1,6 +1,7 @@
 const dotenv = require('dotenv');
 const cloudinary = require('cloudinary').v2;
 const multer = require('multer');
+const { executeQuery } = require('./database');
 let CloudinaryStorage;
 try {
   // Optional dependency: only required if using storage-based uploads
@@ -180,7 +181,7 @@ const handleTaskPhotosUpload = (photoType) => async (req, res) => {
                 async (error, result) => {
                   if (error) return reject(error);
 
-                  await db.query(
+                  await executeQuery(
                     `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
                    VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
                     {
@@ -280,10 +281,12 @@ module.exports = {
   avatarUpload,
   postImagesUpload,
   certificateUpload,
+  taskPhotosUpload,
   memoryUpload,
   videoUpload,
   deleteFile,
   generateSignedCertificateUrl,
   getSecureVideoUrl,
   noShowUpload,
+  handleTaskPhotosUpload,
 };

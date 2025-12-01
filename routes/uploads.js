@@ -74,13 +74,13 @@ router.post(
 router.post(
   "/task-photos/before/:taskId",
   authenticateToken,
-  upload.array("photos", 10),
+  (taskPhotosUpload || memoryUpload).array("photos", 10),
   handleTaskPhotosUpload("before")
 );
 router.post(
   "/task-photos/after/:taskId",
   authenticateToken,
-  upload.array("photos", 10),
+  (taskPhotosUpload || memoryUpload).array("photos", 10),
   handleTaskPhotosUpload("after")
 );
 
