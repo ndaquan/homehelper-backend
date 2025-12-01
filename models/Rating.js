@@ -4,6 +4,7 @@ const { processReview } = require("../config/gemini.service");
 
 class Rating {
   static async getByTaskerId(taskerId, currentUserId = null) {
+    // Query không dùng RatingHelpful để tránh lỗi nếu bảng chưa tồn tại
     const query = `
     SELECT 
       r.rating_id,
@@ -16,19 +17,17 @@ class Rating {
       r.staff_reply_date,
       r.helpful,   
       s.name AS service_name,
-      CASE WHEN rh.user_id IS NOT NULL THEN 1 ELSE 0 END AS userLiked
+      0 AS userLiked
     FROM Ratings r
     JOIN Users u ON r.reviewer_id = u.user_id
     JOIN Bookings b ON r.booking_id = b.booking_id
     JOIN Services s ON b.service_id = s.service_id
-    LEFT JOIN RatingHelpful rh
-      ON r.rating_id = rh.rating_id AND rh.user_id = @param2
     WHERE r.reviewee_id = @param1
       AND r.status = 1
     ORDER BY r.created_at DESC
   `;
 
-    const result = await executeQuery(query, [taskerId, currentUserId]);
+    const result = await executeQuery(query, [taskerId]);
     const rows = result?.recordset || [];
 
     return {

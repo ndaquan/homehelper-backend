@@ -5,6 +5,36 @@ class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
   static async findAll(search = "", serviceId = "") {
     try {
+      console.log('🔍 Tasker.findAll called with:', { search, serviceId });
+
+      const params = [];
+      let paramIndex = 1;
+
+      // Build WHERE conditions
+      // Always filter: only active taskers, not banned users
+      let whereClause = `WHERE u.is_banned = 0 AND (t.status IS NULL OR t.status = 'Active')`;
+      
+      // Search condition - only search in tasker name to avoid filtering out taskers without services
+      if (search && search.trim()) {
+        // Case-insensitive search - SQL Server LIKE is case-insensitive by default for NVARCHAR
+        // But we'll use UPPER() to ensure case-insensitive matching
+        whereClause += ` AND UPPER(u.name) LIKE UPPER(@param${paramIndex})`;
+        params.push(`%${search.trim()}%`);
+        paramIndex++;
+        console.log(`🔍 Search condition added: "${search.trim()}"`);
+      }
+
+      // Service filter - use EXISTS to filter taskers that have this service
+      if (serviceId) {
+        whereClause += ` AND EXISTS (
+          SELECT 1 FROM TaskerServiceVariants tsv2
+          INNER JOIN ServiceVariants sv2 ON tsv2.variant_id = sv2.variant_id
+          WHERE tsv2.tasker_id = t.tasker_id AND sv2.service_id = @param${paramIndex}
+        )`;
+        params.push(serviceId);
+        paramIndex++;
+        console.log(`🔍 Service filter added: serviceId=${serviceId}`);
+      }
 
       let query = `
       SELECT 
@@ -33,28 +63,23 @@ class Tasker {
         FROM Ratings
         GROUP BY reviewee_id
       ) rc ON t.tasker_id = rc.reviewee_id
-      WHERE 1=1
+      ${whereClause}
+      ORDER BY t.tasker_id
     `;
 
-      const params = [];
-      let paramIndex = 1;
-
-      if (search) {
-        query += ` AND (u.name LIKE @param${paramIndex} OR s.name LIKE @param${paramIndex})`;
-        params.push(`%${search}%`);
-        paramIndex++;
-      }
-
-      if (serviceId) {
-        query += ` AND s.service_id = @param${paramIndex}`;
-        params.push(serviceId);
-        paramIndex++;
-      }
-
-      query += ` ORDER BY t.tasker_id`;
-
+      console.log('🔍 SQL Query:', query);
+      console.log('🔍 SQL Params:', params);
+      
       const result = await executeQuery(query, params);
       const rows = result.recordset || [];
+      
+      console.log('📊 Raw rows from DB:', rows.length);
+      if (rows.length > 0) {
+        console.log('📊 First row:', rows[0]);
+        console.log('📊 Sample tasker names:', rows.slice(0, 5).map(r => r.tasker_name));
+      } else {
+        console.log('⚠️ No rows returned from query');
+      }
 
       // Group dữ liệu taskers -> services -> variants
       const taskersMap = {};
@@ -103,7 +128,19 @@ class Tasker {
         }
       });
 
-      return Object.values(taskersMap);
+      const taskersArray = Object.values(taskersMap);
+      console.log('📊 Taskers after grouping:', taskersArray.length);
+      if (taskersArray.length > 0) {
+        console.log('📊 First tasker after grouping:', JSON.stringify(taskersArray[0], null, 2));
+      } else {
+        console.log('⚠️ No taskers after grouping - check if database has taskers');
+        // Debug: Check if there are any taskers in database
+        const checkQuery = `SELECT COUNT(*) as count FROM Taskers t JOIN Users u ON t.tasker_id = u.user_id WHERE u.is_banned = 0`;
+        const checkResult = await executeQuery(checkQuery);
+        console.log('📊 Total taskers in DB (not banned):', checkResult.recordset[0]?.count || 0);
+      }
+
+      return taskersArray;
     } catch (err) {
       console.error("Lỗi findAll Taskers:", err);
       return [];

@@ -317,10 +317,15 @@ exports.createAddress = async (req, res) => {
     const trimmedAddress = inputAddress.trim();
 
     // Gọi VietMap Search API v3 để lấy ref_id
+    const vietmapKey = process.env.VIETMAP_APIKEY || '1fa61c768541c030585bdd9aa021c5a7e74a477fe7ae2540';
+    if (!vietmapKey) {
+      return res.status(500).json({ message: 'VietMap API key chưa được cấu hình' });
+    }
+    
     console.log(`🔍 Tìm kiếm địa chỉ: ${trimmedAddress}`);
     const searchResponse = await axios.get('https://maps.vietmap.vn/api/search/v3', {
       params: {
-        apikey: process.env.VIETMAP_APIKEY,
+        apikey: vietmapKey,
         text: trimmedAddress,
         layers: 'ADDRESS',
         focus: '16.054407,108.202166' // Trung tâm Đà Nẵng
@@ -366,7 +371,7 @@ exports.createAddress = async (req, res) => {
     console.log(`🔍 Gọi Place API với refid: ${refId}`);
     const placeResponse = await axios.get('https://maps.vietmap.vn/api/place/v3', {
       params: {
-        apikey: process.env.VIETMAP_APIKEY,
+        apikey: vietmapKey,
         refid: refId
       },
       timeout: 5000
@@ -426,12 +431,17 @@ exports.updateAddress = async (req, res) => {
     const trimmedAddress = inputAddress.trim();
 
     // Gọi VietMap Search API v3 để lấy ref_id
+    const vietmapKey = process.env.VIETMAP_APIKEY || '1fa61c768541c030585bdd9aa021c5a7e74a477fe7ae2540';
+    if (!vietmapKey) {
+      return res.status(500).json({ message: 'VietMap API key chưa được cấu hình' });
+    }
+    
     console.log(`🔍 Tìm kiếm địa chỉ để cập nhật: ${trimmedAddress}`);
     const searchResponse = await axios.get(
       "https://maps.vietmap.vn/api/search/v3",
       {
         params: {
-          apikey: process.env.VIETMAP_APIKEY,
+          apikey: vietmapKey,
           text: trimmedAddress,
           layers: "ADDRESS",
           focus: "16.054407,108.202166",
@@ -515,7 +525,7 @@ exports.updateAddress = async (req, res) => {
       "https://maps.vietmap.vn/api/place/v3",
       {
         params: {
-          apikey: process.env.VIETMAP_APIKEY,
+          apikey: vietmapKey,
           refid: refId,
         },
         timeout: 5000,
@@ -744,7 +754,9 @@ exports.getTaskersWithDistance = async (req, res) => {
     // Lấy vị trí user
     const userLocation = await Tasker.getUserLocation(userId);
     if (!userLocation) {
-      return res.status(404).json({ error: 'Không tìm thấy địa chỉ của người dùng' });
+      // User chưa có địa chỉ - trả về empty array thay vì 404
+      // Frontend sẽ hiển thị taskers không có distance
+      return res.status(200).json([]);
     }
 
     const { lat: userLat, lng: userLng } = userLocation;
