@@ -263,6 +263,56 @@ const uploadBadgeIcon = async (buffer, badgeId, { transformation = [{ quality: '
   });
   return result; // contains secure_url, public_id, etc.
 };
+let chatImageUpload = null;
+
+if (CloudinaryStorage) {
+  const chatImageStorage = new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+      const userId = (req.user && (req.user.userId || req.user.user_id)) || 'anonymous';
+      const convId = req.params.conversationId || 'unknown';
+
+      return {
+        folder: `${CLOUDINARY_FOLDER_BASE}/chat/${userId}/${convId}`,
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+        resource_type: 'image',
+        
+        // TỰ ĐỘNG TẠO 2 BẢN: 1 rõ + 1 bị ẩn danh
+        eager: [
+          { quality: 'auto', fetch_format: 'auto', width: 1200, crop: 'limit' },
+          { effect: 'pixelate:30', effect: 'blur:300', quality: 'auto:low', fetch_format: 'auto' }
+        ],
+        eager_async: true,
+        public_id: `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+      };
+    },
+  });
+
+  chatImageUpload = multer({
+    storage: chatImageStorage,
+    fileFilter: (req, file, cb) => {
+      if (file.mimetype.startsWith('image/')) cb(null, true);
+      else cb(new Error('Chỉ được gửi hình ảnh!'), false);
+    },
+    limits: {
+      fileSize: 10 * 1024 * 1024,
+      files: 10,
+    },
+  });
+
+
+ 
+}
+const getSecureImageUrl = (publicId, options = {}) => {
+  if (!publicId) return null;
+  return cloudinary.url(publicId, {
+    secure: true,
+    sign_url: true,
+    expires_at: Math.floor(Date.now() / 1000) + 3600, // 1 giờ
+    resource_type: 'image',
+    ...options
+  });
+};
 
 const noShowStorage = new CloudinaryStorage({
   cloudinary,
@@ -284,6 +334,7 @@ module.exports = {
   memoryUpload,
   videoUpload,
   handleTaskPhotosUpload,
+  chatImageUpload,
   deleteFile,
   uploadBufferToCloudinary,
   uploadBadgeIcon,
