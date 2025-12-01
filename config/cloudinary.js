@@ -339,7 +339,7 @@ module.exports = {
   uploadBufferToCloudinary,
   uploadBadgeIcon,
   generateSignedCertificateUrl,
-  getSecureVideoUrl,
+  getSecureVideoUrl,getSecureImageUrl ,
   memoryUpload,
   noShowUpload,
   handleTaskPhotosUpload,
