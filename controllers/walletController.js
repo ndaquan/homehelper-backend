@@ -1,6 +1,6 @@
 const WalletTx = require('../models/WalletTransaction');
 const { getPool, sql } = require('../config/database');
-
+const { notifyBookingEvent } = require('../services/notification.service');
 async function computeBalance(pool, user_id) {
   const rs = await pool.request()
     .input("user_id", sql.Int, user_id)
@@ -150,6 +150,20 @@ exports.payForBooking = async (req, res) => {
 
     // 4) Trả về số dư mới
     const newBalance = currentBalance - toPay;
+
+    // Fire notification to tasker about payment (non-blocking)
+    try {
+      const io = req.app.get('io');
+      await notifyBookingEvent(io, {
+        action: 'paid',
+        booking_id,
+        customer_id: user_id,
+        tasker_id: booking.tasker_id,
+        amount: toPay
+      });
+    } catch (e) {
+      console.warn('[Wallet][notify paid] skipped:', e?.message || e);
+    }
 
     return res.json({
       success: true,
