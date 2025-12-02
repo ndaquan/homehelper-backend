@@ -1,6 +1,7 @@
 const { executeQuery } = require("../config/database");
 const Booking = require("../models/Booking");
 const { updateReliabilityScore } = require("../services/reliabilityScore.service");
+const { notifyBookingEvent, notifySosRequestToTaskers } = require("../services/notification.service");
 
 class BookingController {
   // ============================================
@@ -22,7 +23,8 @@ class BookingController {
         task
       } = req.body;
 
-      const type = "Cơ bản";
+      // Allow FE to specify booking type (e.g., 'SOS') else default
+      const type = req.body.type || "Cơ bản";
 
       const query = `
         INSERT INTO Bookings (
@@ -79,6 +81,41 @@ class BookingController {
         });
 
         console.log("🧾 [Task] Đã tạo Task cho booking_id:", bookingId);
+      }
+
+      // Push notifications depending on type
+      try {
+        const io = req.app.get('io');
+        if (type === 'SOS') {
+          // Send SOS notifications to customer + all eligible taskers
+          await notifySosRequestToTaskers(io, {
+            booking_id: bookingId,
+            customer_id,
+            variant_id,
+            service_id,
+            location,
+          });
+        } else {
+          // Standard booking flow notifications
+          await notifyBookingEvent(io, {
+            action: 'created',
+            booking_id: bookingId,
+            customer_id,
+            tasker_id,
+            service_name: undefined,
+          });
+          // If booking is assigned to a specific tasker, notify them too
+          if (tasker_id) {
+            await notifyBookingEvent(io, {
+              action: 'created_tasker',
+              booking_id: bookingId,
+              customer_id,
+              tasker_id,
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[Booking][notify created] skipped:', e?.message || e);
       }
 
       res.status(201).json({
@@ -305,7 +342,7 @@ class BookingController {
       }
 
       const bookingRes = await executeQuery(
-        `SELECT tasker_id FROM Bookings WHERE booking_id = @param1`,
+        `SELECT tasker_id, customer_id FROM Bookings WHERE booking_id = @param1`,
         [id]
       );
 
@@ -356,6 +393,27 @@ class BookingController {
       }
 
       res.json({ success: true, message: `Cập nhật trạng thái: ${status}` });
+
+      // Fire notifications based on status transitions (non-blocking)
+      try {
+        const io = req.app.get('io');
+        const map = {
+          'Đã chấp nhận': 'accepted',
+          'Đang tiến hành': 'started',
+          'Hoàn thành': 'completed',
+        };
+        const action = map[status];
+        if (action && booking) {
+          await notifyBookingEvent(io, {
+            action,
+            booking_id: Number(id),
+            customer_id: booking.customer_id,
+            tasker_id: booking.tasker_id,
+          });
+        }
+      } catch (e) {
+        console.warn('[Booking][notify status] skipped:', e?.message || e);
+      }
     } catch (error) {
       console.error("❌ Lỗi updateStatus:", error);
       res.status(500).json({ success: false, message: error.message });
