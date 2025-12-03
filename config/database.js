@@ -27,7 +27,7 @@ function createPool() {
   if (pool) {
     try {
       pool.close();
-    } catch (e) {}
+    } catch (e) { }
   }
   pool = new sql.ConnectionPool(dbConfig);
   pool.on("error", (err) => console.error("Database connection error:", err));
@@ -98,9 +98,15 @@ async function executeStoredProcedure(procName, params = []) {
     const request = pool.request();
 
     // Bind parameters nếu có
-    params.forEach((param, index) => {
-      request.input(`param${index + 1}`, param);
-    });
+    if (Array.isArray(params)) {
+      params.forEach((param, index) => {
+        if (typeof param === "string") {
+          request.input(`param${index + 1}`, sql.NVarChar, param.trim());
+        } else {
+          request.input(`param${index + 1}`, param);
+        }
+      });
+    }
 
     const result = await request.execute(procName);
     return result;

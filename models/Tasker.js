@@ -12,8 +12,8 @@ class Tasker {
 
       // Build WHERE conditions
       // Always filter: only active taskers, not banned users
-      let whereClause = `WHERE u.is_banned = 0 AND (t.status IS NULL OR t.status = 'Active')`;
-      
+      let whereClause = `WHERE u.is_banned = 0 AND (t.status IS NULL OR t.status = N'Hoạt động')`;
+
       // Search condition - only search in tasker name to avoid filtering out taskers without services
       if (search && search.trim()) {
         // Case-insensitive search - SQL Server LIKE is case-insensitive by default for NVARCHAR
@@ -69,10 +69,10 @@ class Tasker {
 
       console.log('🔍 SQL Query:', query);
       console.log('🔍 SQL Params:', params);
-      
+
       const result = await executeQuery(query, params);
       const rows = result.recordset || [];
-      
+
       console.log('📊 Raw rows from DB:', rows.length);
       if (rows.length > 0) {
         console.log('📊 First row:', rows[0]);
@@ -153,17 +153,27 @@ class Tasker {
     console.log("📌 [Stack]\n", new Error().stack);
 
     // 👇 DÙNG ENUM ĐÚNG VỚI DATABASE
-    const ALLOWED = ["Active", "Inactive", "Banned"];
+    const ALLOWED = ["Hoạt động", "Không hoạt động", "Bị chặn"];
 
     if (!ALLOWED.includes(status)) {
       console.error("❌ [ERROR] Status KHÔNG hợp lệ:", status);
       return false; // chặn lại không cho chạy xuống SQL
     }
 
-    const query = `UPDATE Taskers SET status = @param1 WHERE tasker_id = @param2`;
+    const query = `UPDATE Taskers SET status = N@param1 WHERE tasker_id = @param2`;
     console.log("🔵 SQL RUN:", query, [status, taskerId]);
 
-    await executeQuery(query, [status, taskerId]);
+    const request = pool.request();
+
+    request.input("status", sql.NVarChar, status.trim());
+    request.input("taskerId", sql.Int, taskerId);
+
+    await request.query(`
+    UPDATE Taskers 
+    SET status = @status 
+    WHERE tasker_id = @taskerId
+`);
+    ;
     return true;
   }
 

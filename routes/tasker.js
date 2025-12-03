@@ -29,8 +29,8 @@ router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
 
 // Specific routes with :id parameter (must be before generic /:id)
-router.get("/:id/services", taskerController.getWithServices);
 router.get("/reputation/:taskerId", taskerController.getTaskerReputation);
+router.get("/:id/services", taskerController.getWithServices);
 
 // Certifications & Upgrade
 // API endpoint: Lấy danh sách chứng chỉ đang pending cho staff duyệt
