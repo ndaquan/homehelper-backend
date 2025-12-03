@@ -54,15 +54,16 @@ exports.payForBooking = async (req, res) => {
   const user_id = req.user?.user_id;
   if (!user_id) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-  const { booking_id, amount } = req.body || {};
+  const { booking_id, voucher_id } = req.body || {};
   if (!booking_id) return res.status(400).json({ success: false, message: "booking_id is required" });
 
   console.log("=== [DEBUG payForBooking] ===");
   console.log("user_id:", user_id);
   console.log("booking_id:", booking_id);
-  console.log("amount:", amount);
+  console.log("voucher_id:", voucher_id);
 
   let tx;
+
   try {
     const pool = await getPool();
     console.log("✅ Connected to DB");
@@ -94,13 +95,40 @@ exports.payForBooking = async (req, res) => {
       return res.status(403).json({ success: false, message: "You cannot pay for this booking" });
     }
 
-    // Tiền cần trừ: ưu tiên final_price, sau đó expected_price, hoặc amount client gửi
-    const toPay = Number(
-      amount ??
-      booking.final_price ??
-      booking.expected_price ??
-      0
-    );
+    // 2) Lấy giá gốc
+    let price = Number(booking.final_price);
+
+    if (!price || price <= 0) {
+      price = Number(booking.expected_price);
+    }
+
+    // 3) Nếu có voucher_id → BE tự kiểm tra
+    if (voucher_id) {
+      const vRs = await pool.request()
+        .input("voucher_id", sql.Int, voucher_id)
+        .input("user_id", sql.Int, user_id)
+        .query(`
+          SELECT TOP 1 *
+          FROM Vouchers
+          WHERE voucher_id = @voucher_id AND user_id = @user_id
+        `);
+
+      const voucher = vRs.recordset[0];
+
+      if (!voucher)
+        return res.status(400).json({ success: false, message: "Voucher không hợp lệ" });
+
+      if (new Date(voucher.expiry_date) < new Date())
+        return res.status(400).json({ success: false, message: "Voucher đã hết hạn" });
+
+      // Áp dụng giảm giá
+      price = Math.round(price * (1 - voucher.discount));
+
+      console.log("💳 Applied voucher:", voucher.discount * 100 + "%");
+      console.log("💰 Price after discount:", price);
+    }
+
+    const toPay = price;
     if (!toPay || toPay <= 0) {
       return res.status(400).json({ success: false, message: "Invalid amount to pay" });
     }
@@ -129,7 +157,7 @@ exports.payForBooking = async (req, res) => {
       .input("type", sql.NVarChar, "debit")
       .input("purpose", sql.NVarChar, "booking_payment")
       .input("related_id", sql.Int, booking_id)
-      .input("note", sql.NVarChar, "Local fake payment")
+      .input("note", sql.NVarChar, voucher_id ? `Payment with voucher ${voucher_id}` : "Payment")
       .query(`
         INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
         VALUES (@user_id, @amount, @type, @purpose, @related_id, @note, SYSUTCDATETIME());
@@ -145,32 +173,26 @@ exports.payForBooking = async (req, res) => {
         WHERE booking_id = @booking_id;
       `);
 
+    // 3.3) Đánh dấu voucher đã dùng (nếu có)
+    if (voucher_id) {
+      await reqTx
+        .input("voucher_id", sql.Int, voucher_id)
+        .query(`
+          UPDATE Vouchers
+          SET used = 1
+          WHERE voucher_id = @voucher_id;
+        `);
+    }
+
     await tx.commit();
     console.log("✅ COMMIT DONE!");
-
-    // 4) Trả về số dư mới
-    const newBalance = currentBalance - toPay;
-
-    // Fire notification to tasker about payment (non-blocking)
-    try {
-      const io = req.app.get('io');
-      await notifyBookingEvent(io, {
-        action: 'paid',
-        booking_id,
-        customer_id: user_id,
-        tasker_id: booking.tasker_id,
-        amount: toPay
-      });
-    } catch (e) {
-      console.warn('[Wallet][notify paid] skipped:', e?.message || e);
-    }
 
     return res.json({
       success: true,
       message: "Thanh toán thành công (local fake)",
       booking_id,
       paid_amount: toPay,
-      balance_after: newBalance
+      balance_after: currentBalance - toPay
     });
   } catch (e) {
     if (tx) {

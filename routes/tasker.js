@@ -30,6 +30,7 @@ router.get('/', taskerController.getAll);
 
 // Specific routes with :id parameter (must be before generic /:id)
 router.get("/:id/services", taskerController.getWithServices);
+router.get("/reputation/:taskerId", taskerController.getTaskerReputation);
 
 // Certifications & Upgrade
 // API endpoint: Lấy danh sách chứng chỉ đang pending cho staff duyệt

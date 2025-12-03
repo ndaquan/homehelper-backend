@@ -8,6 +8,35 @@ const { cloudinary, certificateUpload } = require('../config/cloudinary');
 const { extractCertificateFromUrl } = require('../config/gemini.service');
 const TaskerApplication = require('../models/TaskerApplication');
 
+exports.getTaskerReputation = async (req, res) => {
+    try {
+        const taskerId = req.params.taskerId;
+
+        const result = await executeQuery(`
+            SELECT tasker_id, reliability_score
+            FROM Taskers
+            WHERE tasker_id = @param1
+        `, [taskerId]);
+
+        const tasker = result.recordset?.[0];
+
+        if (!tasker) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy tasker"
+            });
+        }
+
+        res.json({
+            success: true,
+            reputation: tasker.reliability_score
+        });
+    } catch (err) {
+        console.error("❌ Lỗi getTaskerReputation:", err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 // Lấy danh sách variant_id đã đăng ký của tasker
 exports.getRegisteredVariantIds = async (req, res) => {
   try {
