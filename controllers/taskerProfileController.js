@@ -26,8 +26,16 @@ class TaskerProfileController {
     }
 
     try {
-      const { name, phone, Introduce } = req.body;
-      const updatedTasker = await TaskerProfile.update(id, { name, phone, Introduce });
+      console.log('📥 Raw request body:', JSON.stringify(req.body));
+      const { name, phone, Introduce, avatar_url } = req.body;
+      console.log('📥 Extracted fields:', { 
+        name: name || 'undefined', 
+        phone: phone || 'undefined', 
+        Introduce: Introduce || 'undefined',
+        avatar_url: avatar_url ? `[${avatar_url.length} chars]` : 'undefined'
+      });
+      const updatedTasker = await TaskerProfile.update(id, { name, phone, Introduce, avatar_url });
+      console.log('📤 Updated tasker result:', JSON.stringify(updatedTasker, null, 2));
       
       if (!updatedTasker) {
         return res.status(404).json({ message: "Tasker không tồn tại" });
