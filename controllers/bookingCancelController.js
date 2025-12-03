@@ -103,6 +103,28 @@ class BookingCancelController {
                         [booking.customer_id, refundAmount, bookingId]
                     );
                 }
+                console.log(">>> [VOUCHER DEBUG] Bắt đầu tạo voucher cho booking:", booking.booking_id);
+                console.log(">>> [VOUCHER DEBUG] booking.customer_id =", booking.customer_id);
+                console.log(">>> [VOUCHER DEBUG] booking.tasker_id =", booking.tasker_id);
+
+                try {
+                    console.log(">>> [VOUCHER DEBUG] Chuẩn bị INSERT...");
+
+                    await executeQuery(`
+                        INSERT INTO Vouchers
+                        (user_id, type, discount, used, created_at, source_booking_id)
+                        VALUES
+                        (@uid, 'compensation', 0.1, 0, GETDATE(), @bid)
+                    `, {
+                        uid: booking.customer_id,
+                        bid: booking.booking_id
+                    });
+
+                    console.log("🎟️ [VOUCHER SUCCESS] Đã tạo voucher 10% do tasker hủy cho khách:", booking.customer_id);
+
+                } catch (err) {
+                    console.error("❌ [VOUCHER ERROR] Lỗi khi tạo voucher:", err);
+                }
             }
 
 
