@@ -202,6 +202,24 @@ exports.rejectEvidence = async (req, res) => {
     // Trừ 30 uy tín
     await updateReliabilityScore(booking.tasker_id, -30);
 
+    try {
+      console.log("🔥 Bắt đầu INSERT voucher...");
+      await executeQuery(`
+        INSERT INTO Vouchers
+        (user_id, type, discount, used, created_at, source_booking_id)
+        VALUES
+        (@uid, 'compensation', 0.1, 0, GETDATE(), @bid)
+      `, {
+        uid: booking.customer_id,
+        bid: booking.booking_id
+      });
+
+      console.log(`🎟️ Đã tạo voucher cho khách ${booking.customer_id}`);
+    }
+    catch (voucherErr) {
+      console.error("❌ LỖI INSERT VOUCHER:", voucherErr);
+    }
+
     res.json({
       success: true,
       message: "Đã từ chối báo cáo. Hoàn 100% cho khách và trừ 30 uy tín.",

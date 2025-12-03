@@ -46,8 +46,9 @@ router.get(
   bookingController.canRateTasker
 );
 
+router.get("/details/:id", authenticateToken, bookingController.getBookingDetails);
+
 // // GET /api/bookings/:bookingId - chi tiết booking
-// router.get('/:bookingId', authenticateToken, getBookingDetails);
 
 // PATCH /api/bookings/:bookingId/final-price
 router.patch("/:bookingId/final-price", authenticateToken, updateFinalPrice);

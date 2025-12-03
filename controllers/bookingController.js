@@ -185,7 +185,8 @@ class BookingController {
           ut.name AS tasker_name, ut.email AS tasker_email, ut.phone AS tasker_phone,
           tk.task_id,
           tk.description AS task_description,
-          tk.checklist AS task_checklist
+          tk.checklist AS task_checklist,
+          tk.photos AS task_photos
         FROM Bookings b
         LEFT JOIN Taskers t ON b.tasker_id = t.tasker_id
         LEFT JOIN Services s ON b.service_id = s.service_id
@@ -233,9 +234,9 @@ class BookingController {
       const result = await executeQuery(query, { id });
 
       if (result.recordset.length === 0) {
-        return res.json({ 
-          available: false, 
-          message: 'Không tìm thấy đơn SOS này' 
+        return res.json({
+          available: false,
+          message: 'Không tìm thấy đơn SOS này'
         });
       }
 
@@ -245,22 +246,22 @@ class BookingController {
       const isAvailable = booking.tasker_id === null && booking.status === 'Chờ xử lý';
 
       if (isAvailable) {
-        res.json({ 
-          available: true, 
-          message: 'Đơn SOS còn khả dụng, bạn có thể nhận' 
+        res.json({
+          available: true,
+          message: 'Đơn SOS còn khả dụng, bạn có thể nhận'
         });
       } else {
-        res.json({ 
-          available: false, 
+        res.json({
+          available: false,
           message: 'Đơn SOS này đã được người khác nhận rồi!',
           takenBy: booking.tasker_id || 'unknown'
         });
       }
     } catch (error) {
       console.error("❌ Lỗi checkSosAvailability:", error);
-      res.status(500).json({ 
-        available: false, 
-        message: 'Có lỗi khi kiểm tra tính khả dụng của SOS' 
+      res.status(500).json({
+        available: false,
+        message: 'Có lỗi khi kiểm tra tính khả dụng của SOS'
       });
     }
   }
@@ -270,79 +271,15 @@ class BookingController {
       const { id } = req.params;
       const { status } = req.body;
 
-      // If a tasker accepts a booking (Đã chấp nhận) and booking.tasker_id is NULL,
-      // set the tasker_id to the current authenticated user.
-      const userId = req.user?.userId || null;
-      console.log(`[BOOKING] updateStatus called - booking_id: ${id}, status: ${status}, tasker_id: ${userId}`);
-
-      const query = `
-        BEGIN TRAN;
-        IF @status = N'Đã chấp nhận'
-        BEGIN
-          UPDATE Bookings
-          SET tasker_id = CASE WHEN tasker_id IS NULL THEN @userId ELSE tasker_id END,
-              status = @status
-          WHERE booking_id = @id;
-        END
-        ELSE
-        BEGIN
-          UPDATE Bookings SET status = @status WHERE booking_id = @id;
-        END
-        COMMIT;
-      `;
-
-      await executeQuery(query, { id, status, userId });
-      console.log(`[BOOKING] Status updated successfully for booking ${id}`);
-
-      // If status is "Đã chấp nhận" for an SOS booking, notify customer via socket
-      if (status === 'Đã chấp nhận') {
-        try {
-          console.log(`[BOOKING] Checking if booking ${id} is SOS type...`);
-          const bookingRes = await executeQuery(
-            `SELECT booking_id, customer_id, type, tasker_id FROM Bookings WHERE booking_id = @id`,
-            { id }
-          );
-
-          if (bookingRes.recordset && bookingRes.recordset.length > 0) {
-            const booking = bookingRes.recordset[0];
-            const isSOS = booking.type === 'SOS';
-            console.log(`[BOOKING] Booking type: ${booking.type}, isSOS: ${isSOS}`);
-
-            if (isSOS) {
-              const io = req.app.get('io');
-              if (io) {
-                console.log(`[BOOKING] Emitting sos_job_accepted to customer ${booking.customer_id}`);
-                
-                // Get tasker info
-                const taskerRes = await executeQuery(
-                  `SELECT user_id, name FROM Users WHERE user_id = @userId`,
-                  { userId }
-                );
-
-                const taskerName = taskerRes.recordset?.[0]?.name || 'Tasker';
-                const acceptedPayload = {
-                  booking_id: id,
-                  taken_by_tasker_id: userId,
-                  taken_by_name: taskerName,
-                  message: 'Tasker đã nhận công việc của bạn từ API'
-                };
-
-                // Broadcast to all users as fallback (customer might be on any page)
-                io.emit('sos_job_accepted', acceptedPayload);
-                console.log(`[BOOKING] Broadcasted sos_job_accepted:`, acceptedPayload);
-              } else {
-                console.warn(`[BOOKING] ❌ io instance not found in req.app`);
-              }
-            }
-          }
-        } catch (socketErr) {
-          console.error(`[BOOKING] ❌ Error emitting socket event:`, socketErr);
-          // Don't fail the API response due to socket error
-        }
-      }
+      await executeQuery(
+        `UPDATE Bookings SET status = @status WHERE booking_id = @id`,
+        { id, status }
+      );
 
       const bookingRes = await executeQuery(
-        `SELECT tasker_id, customer_id FROM Bookings WHERE booking_id = @param1`,
+        `SELECT tasker_id, customer_id, expected_price, final_price 
+          FROM Bookings 
+          WHERE booking_id = @param1`,
         [id]
       );
 
@@ -389,6 +326,31 @@ class BookingController {
           );
 
           console.log("💸 Đã ghi credit vào WalletTransactions!");
+
+          try {
+            const customerRes = await executeQuery(
+              `SELECT user_id, role, points 
+                FROM Users 
+                WHERE user_id = @customer_id`,
+              { customer_id: booking.customer_id }
+            );
+
+            const customer = customerRes.recordset?.[0];
+
+            const role = (customer?.role || "").trim().toLowerCase();
+
+            if (role === "customer") {
+              await executeQuery(
+                `UPDATE Users SET points = points + 10 WHERE user_id = @customer_id`,
+                { customer_id: customer.user_id }
+              );
+              console.log(`🎉 +10 points cho khách ${customer.user_id}`);
+            } else {
+              console.log(`⛔ Không cộng điểm vì role = '${customer.role}'`);
+            }
+          } catch (e) {
+            console.error("❌ Lỗi cộng điểm:", e);
+          }
         }
       }
 
@@ -531,10 +493,11 @@ class BookingController {
   // Get booking details by ID
   static async getBookingDetails(req, res) {
     try {
-      const bookingId = parseInt(req.params.bookingId, 10);
-      if (!bookingId) {
-        return res.status(400).json({ success: false, message: 'bookingId không hợp lệ' });
+      const id = parseInt(req.params.id, 10);  // FE dùng :id
+      if (!id) {
+        return res.status(400).json({ success: false, message: "bookingId không hợp lệ" });
       }
+
       // Allow either participant (customer or tasker) to fetch details; otherwise 403
       const detailsRes = await executeQuery(
         `
@@ -549,36 +512,52 @@ class BookingController {
             b.location,
             b.status,
             b.final_price,
-            s.name AS service_name,
-            sv.variant_name,
+            b.expected_price,
             sv.unit,
             sv.price_min,
             sv.price_max,
+            s.name AS service_name,
+            sv.variant_name,
             uc.name AS customer_name,
-            ut.name AS tasker_name
+            ut.name AS tasker_name,
+            tk.description AS task_description,
+            tk.checklist AS task_checklist,
+            tk.photos AS task_photos
           FROM Bookings b
           LEFT JOIN Services s ON b.service_id = s.service_id
           LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
           LEFT JOIN Users uc ON uc.user_id = b.customer_id
           LEFT JOIN Users ut ON ut.user_id = b.tasker_id
+          LEFT JOIN Tasks tk ON tk.booking_id = b.booking_id
           WHERE b.booking_id = @param1
         `,
-        [bookingId]
+        [id]
       );
-      const data = detailsRes.recordset?.[0];
-      if (!data) {
-        return res.status(404).json({ success: false, message: 'Booking không tồn tại' });
+
+      const booking = detailsRes.recordset?.[0];
+
+      if (!booking) {
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
       }
+
       const userId = req.user.userId;
-      if (String(data.customer_id) !== String(userId) && String(data.tasker_id) !== String(userId)) {
-        return res.status(403).json({ success: false, message: 'Không có quyền xem booking này' });
+
+      if (
+        String(booking.customer_id) !== String(userId) &&
+        String(booking.tasker_id) !== String(userId)
+      ) {
+        return res.status(403).json({ success: false, message: "Không có quyền xem booking này" });
       }
-      return res.json({ success: true, data });
+
+      // FE yêu cầu phải trả "booking"
+      return res.json({ success: true, booking });
+
     } catch (error) {
-      console.error('❌ Error getting booking details:', error);
-      return res.status(500).json({ success: false, message: 'Internal server error' });
+      console.error("❌ Error:", error);
+      return res.status(500).json({ success: false, message: "Internal server error" });
     }
   }
+
 
   // Update final price for a booking (tasker approval of negotiation)
   static async updateFinalPrice(req, res) {
