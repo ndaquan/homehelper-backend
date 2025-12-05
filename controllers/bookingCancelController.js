@@ -94,7 +94,9 @@ class BookingCancelController {
                 await updateReliabilityScore(booking.tasker_id, penalty);
 
                 // ⭐ Refund FULL cho khách
-                const refundAmount = booking.final_price || booking.expected_price || 0;
+                const refundAmount = (booking.final_price && booking.final_price > 0)
+                    ? booking.final_price
+                    : booking.expected_price || 0;
 
                 if (refundAmount > 0) {
                     await executeQuery(
@@ -127,6 +129,22 @@ class BookingCancelController {
                 }
             }
 
+            
+            // 6️⃣ Emit booking cancellation notification
+            try {
+                const io = req.app.get('io');
+                await notifyBookingEvent(io, {
+                    action: 'cancelled',
+                    booking_id: booking.booking_id,
+                    customer_id: booking.customer_id,
+                    tasker_id: booking.tasker_id,
+                    cancelledBy,
+                    refundAmount,
+                    compensationAmount
+                });
+            } catch (notifyErr) {
+                console.warn('[booking.cancel] notifyBookingEvent failed:', notifyErr?.message || notifyErr);
+            }
 
             return res.json({
                 success: true,

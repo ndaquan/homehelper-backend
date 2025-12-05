@@ -1,5 +1,7 @@
 const { executeQuery } = require("../config/database");
 const { getReliabilityColor, getReliabilityLabel } = require("../utils/reliability");
+const sql = require('mssql');
+const { getPool } = require('../config/database');
 
 class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
@@ -150,31 +152,31 @@ class Tasker {
   // Cập nhật trạng thái hoạt động của tasker
   static async updateStatus(taskerId, status) {
     console.log("🔥 [DEBUG] updateStatus() CALLED:", { taskerId, status });
-    console.log("📌 [Stack]\n", new Error().stack);
 
-    // 👇 DÙNG ENUM ĐÚNG VỚI DATABASE
     const ALLOWED = ["Hoạt động", "Không hoạt động", "Bị chặn"];
-
     if (!ALLOWED.includes(status)) {
       console.error("❌ [ERROR] Status KHÔNG hợp lệ:", status);
-      return false; // chặn lại không cho chạy xuống SQL
+      return false;
     }
 
-    const query = `UPDATE Taskers SET status = N@param1 WHERE tasker_id = @param2`;
-    console.log("🔵 SQL RUN:", query, [status, taskerId]);
+    try {
+      const pool = await getPool(); // ✅ lấy pool kết nối
+      const request = pool.request();
 
-    const request = pool.request();
+      request.input("status", sql.NVarChar, status.trim());
+      request.input("taskerId", sql.Int, taskerId);
 
-    request.input("status", sql.NVarChar, status.trim());
-    request.input("taskerId", sql.Int, taskerId);
+      await request.query(`
+        UPDATE Taskers 
+        SET status = @status 
+        WHERE tasker_id = @taskerId
+      `);
 
-    await request.query(`
-    UPDATE Taskers 
-    SET status = @status 
-    WHERE tasker_id = @taskerId
-`);
-    ;
-    return true;
+      return true;
+    } catch (err) {
+      console.error("❌ [ERROR] updateStatus failed:", err);
+      return false;
+    }
   }
 
   // Lấy danh sách tasker theo variant_id (liên kết qua TaskerServiceVariants)

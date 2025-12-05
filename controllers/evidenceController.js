@@ -113,8 +113,11 @@ exports.approveEvidence = async (req, res) => {
 
     // --- RULE R6: Tasker nhận 100% (no_show)
     const policy = calculateRefundPolicy(booking, "no_show");
-    const total = policy.total;   // final_price hoặc expected_price
-    const compensationAmount = Math.round(total * (policy.compensationPercent / 100));
+    // ✅ Tiền gốc không dính voucher
+    const gross = booking.base_price > 0 ? booking.base_price : booking.expected_price;
+
+    // ✅ Tasker nhận 90% (platform giữ 10%)
+    const compensationAmount = Math.round(Number(gross) * 0.9);
 
     /// Update Evidence
     await executeQuery(`
@@ -168,9 +171,32 @@ exports.rejectEvidence = async (req, res) => {
     const b = await executeQuery(`SELECT * FROM Bookings WHERE booking_id = @bid`, { bid: review.booking_id });
     const booking = b.recordset[0];
 
+    const alreadyRefunded = await executeQuery(`
+      SELECT TOP 1 1
+      FROM WalletTransactions
+      WHERE purpose = N'evidence_rejected' AND related_id = @bid
+    `, { bid: booking.booking_id });
+
+    if (alreadyRefunded.recordset.length) {
+      return res.json({ success: false, message: "Booking đã được hoàn tiền do reject trước đó." });
+    }
+
+    // 🚫 Chống double theo trạng thái (query trạng thái hiện tại)
+    const sttRes = await executeQuery(
+      `SELECT status FROM Bookings WHERE booking_id = @bid`,
+      { bid: booking.booking_id }
+    );
+    const currentStatus = sttRes.recordset[0]?.status;
+    if (currentStatus === 'Hủy' || currentStatus === 'Báo cáo bị từ chối') {
+      return res.json({ success: false, message: "Booking đã được xử lý refund trước đó." });
+    }
+
+
     // --- RULE R8: refund 100% for customer
     const policy = calculateRefundPolicy(booking, "evidence_rejected");
-    const total = policy.total;
+    const total = booking.final_price > 0
+      ? booking.final_price
+      : booking.expected_price;
     const refundAmount = Math.round(total * (policy.refundPercent / 100));
 
     // Update evidence
@@ -186,6 +212,23 @@ exports.rejectEvidence = async (req, res) => {
       SET status = N'Báo cáo bị từ chối'
       WHERE booking_id=@bid
     `, { bid: booking.booking_id });
+
+    // 3) Trả lại voucher đã dùng
+    const usedVoucher = await executeQuery(`
+      SELECT TOP 1 voucher_id
+      FROM Vouchers
+      WHERE source_booking_id = @bid AND used = 1
+    `, { bid: booking.booking_id });
+
+    if (usedVoucher.recordset.length > 0) {
+      await executeQuery(`
+        UPDATE Vouchers
+        SET used = 0
+        WHERE voucher_id = @vid
+      `, { vid: usedVoucher.recordset[0].voucher_id });
+
+      console.log("🎟️ Đã hoàn trả voucher đã sử dụng:", usedVoucher.recordset[0].voucher_id);
+    }
 
     // Refund → customer
     await executeQuery(`

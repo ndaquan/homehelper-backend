@@ -60,7 +60,7 @@ async function fetchUserNames({ customer_id, tasker_id }) {
 }
 
 // Booking event notifications
-async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_id, service_name, amount }) {
+async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_id, service_name, amount, cancelledBy, refundAmount, compensationAmount }) {
   const { customer_name, tasker_name } = await fetchUserNames({ customer_id, tasker_id });
   const baseData = { booking_id, action, customer_id, tasker_id, customer_name, tasker_name };
   switch (action) {
@@ -70,7 +70,7 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         type: 'booking',
         title: `Đã tạo yêu cầu dịch vụ${service_name ? ' - ' + service_name : ''}`,
         content: `Đơn #${booking_id} đã được tạo cho ${customer_name || 'khách hàng'}. Chúng tôi sẽ thông báo khi tasker nhận việc.`,
-        data: { ...baseData, url: `${CLIENT_BASE_URL}/customer/bookings` }
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/customer/booking/${booking_id}` }
       });
     case 'created_tasker':
       return notify(io, {
@@ -112,6 +112,27 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         content: `${customer_name || 'Khách'} đã thanh toán cho đơn #${booking_id}${amount ? ` (${amount.toLocaleString('vi-VN')}₫)` : ''}.`,
         data: { ...baseData, amount, url: `${CLIENT_BASE_URL}/tasker/bookings/${booking_id}` }
       });
+    case 'cancelled': {
+      // Notify customer
+      await notify(io, {
+        user_id: customer_id,
+        type: 'booking',
+        title: 'Đơn dịch vụ đã hủy',
+        content: `Đơn #${booking_id} đã được hủy${cancelledBy ? ` (bởi ${cancelledBy})` : ''}.`,
+        data: { ...baseData, cancelledBy, refundAmount, compensationAmount, url: `${CLIENT_BASE_URL}/customer/bookings` }
+      });
+      // Notify tasker
+      if (tasker_id) {
+        await notify(io, {
+          user_id: tasker_id,
+          type: 'booking',
+          title: 'Đơn dịch vụ đã hủy',
+          content: `Đơn #${booking_id} đã bị hủy${cancelledBy ? ` (bởi ${cancelledBy})` : ''}.`,
+          data: { ...baseData, cancelledBy, refundAmount, compensationAmount, url: `${CLIENT_BASE_URL}/tasker/bookings/${booking_id}` }
+        });
+      }
+      return;
+    }
     default:
       return notify(io, {
         user_id: customer_id,
@@ -120,6 +141,42 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         content: `Đơn #${booking_id} có cập nhật: ${action}.`,
         data: baseData
       });
+  }
+}
+// Quote event notifications
+async function notifyQuoteEvent(io, { action, quote_id, post_id, customer_id, tasker_id, variant_id, proposed_price }) {
+  const { customer_name, tasker_name } = await fetchUserNames({ customer_id, tasker_id });
+  const baseData = { quote_id, post_id, customer_id, tasker_id, customer_name, tasker_name, variant_id, proposed_price };
+  switch (action) {
+      case 'sent':
+        // Tasker sent a quote -> notify customer (post owner)
+        return notify(io, {
+          user_id: customer_id,
+          type: 'message',
+          title: 'Bạn có yêu cầu làm việc mới',
+          content: `${tasker_name || 'Tasker'} đã gửi báo giá cho bài viết #${post_id} với giá ${Number(proposed_price).toLocaleString('vi-VN')}₫`,
+          data: { ...baseData, url: `${CLIENT_BASE_URL}/blog/${post_id}/quotes` }
+        });
+    case 'accepted':
+      // Customer accepted a quote -> notify tasker
+      return notify(io, {
+        user_id: tasker_id,
+        type: 'message',
+        title: 'Yêu cầu làm việc được chấp nhận',
+        content: `${customer_name || 'Khách hàng'} đã chấp nhận yêu cầu làm việc của bạn cho bài viết #${post_id}.`,
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/tasker/bookings` }
+      });
+    case 'rejected':
+      // Customer rejected a quote -> notify tasker
+      return notify(io, {
+        user_id: tasker_id,
+        type: 'message',
+        title: 'Yêu cầu làm việc bị từ chối',
+        content: `${customer_name || 'Khách hàng'} đã từ chối yêu cầu làm việc của bạn cho bài viết #${post_id}.`,
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/blog/${post_id}` }
+      });
+    default:
+      return;
   }
 }
     // SOS booking notifications (notify customer + all matching taskers)
@@ -196,4 +253,5 @@ module.exports = {
   notify,
   notifyBookingEvent,
   notifySosRequestToTaskers,
+  notifyQuoteEvent,
 };

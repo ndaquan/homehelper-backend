@@ -10,7 +10,7 @@ const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getT
 
 const sessionController = require("../controllers/sessionController");
 const { taskPhotosUpload, memoryUpload } = require("../config/cloudinary");
-const { cancelBooking } = require("../controllers/bookingCancelController");
+const bookingCancelController = require("../controllers/bookingCancelController");
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
 router.post(
@@ -80,6 +80,6 @@ router.patch(
 );
 
 // TODO: Implement cancelBooking function in bookingController if needed
-// router.post("/:id/cancel", authenticateToken, bookingController.cancelBooking);
+router.post("/:id/cancel", authenticateToken, bookingCancelController.cancelBooking);
 
 module.exports = router;
