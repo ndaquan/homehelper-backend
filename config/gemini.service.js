@@ -652,27 +652,6 @@ Bạn là trợ lý AI thân thiện của HomeHelper - nền tảng kết nối
 - Hủy trước <4 giờ: Không hoàn tiền
 - Tasker hủy đơn: Khách được hoàn 100%
 
-=== CHƯƠNG TRÌNH THÀNH VIÊN ===
-🥉 BRONZE (100 điểm):
-   - Giảm 5% dịch vụ
-   - Ưu tiên đặt lịch
-   - Mẹo dọn dẹp hàng tháng
-
-🥈 SILVER (500 điểm):
-   - Giảm 10% dịch vụ
-   - Miễn phí 1 lần deep cleaning
-   - Nâng cấp vật tư premium
-
-🥇 GOLD (1,000 điểm):
-   - Giảm 15% dịch vụ
-   - Miễn phí dịch vụ hàng tháng
-   - Tất cả vật tư premium
-
-💎 PLATINUM (2,000 điểm):
-   - Giảm 20% dịch vụ
-   - Đãi ngộ VIP
-   - Gói dịch vụ tùy chỉnh
-   - Tasker riêng được chỉ định
 
 === HỆ THỐNG HUY HIỆU TASKER ===
 - 🏆 Hoàn thành nhiều công việc

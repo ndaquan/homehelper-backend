@@ -173,6 +173,19 @@ exports.payForBooking = async (req, res) => {
         WHERE booking_id = @booking_id;
       `);
 
+    // 3.2.1) Lưu final_price đúng với số tiền khách đã trả
+    await reqTx
+      .input("booking_id", sql.Int, booking_id)
+      .input("final_price", sql.Money, toPay)
+      .input("voucher_id", sql.Int, voucher_id || null)
+      .query(`
+        UPDATE Bookings
+        SET final_price = @final_price,
+            base_price = @final_price,      -- optional nhưng nên set cho đồng bộ
+            used_voucher_id = @voucher_id   -- nếu bạn muốn lưu voucher_id
+        WHERE booking_id = @booking_id;
+      `);
+
     // 3.3) Đánh dấu voucher đã dùng (nếu có)
     if (voucher_id) {
       await reqTx
@@ -186,6 +199,19 @@ exports.payForBooking = async (req, res) => {
 
     await tx.commit();
     console.log("✅ COMMIT DONE!");
+
+    try {
+      const io = req.app.get('io');
+      await notifyBookingEvent(io, {
+        action: 'paid',
+        booking_id,
+        customer_id: user_id,
+        tasker_id: booking.tasker_id,
+        amount: toPay
+      });
+    } catch (notifyErr) {
+      console.warn('[wallet.pay] notifyBookingEvent failed:', notifyErr?.message || notifyErr);
+    }
 
     return res.json({
       success: true,
