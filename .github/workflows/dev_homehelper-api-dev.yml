@@ -22,13 +22,15 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # Nếu backend không có build, dòng này không sao vì nó "if-present"
       - name: Build project
         run: npm run build --if-present
 
       - name: Prepare deployment package
         run: |
           mkdir deploy
-          cp -r package.json dist node_modules deploy/
+          shopt -s extglob
+          cp -r !(deploy|node_modules|.github) deploy/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -45,6 +47,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: node-app
+          path: .
 
       - name: Wait 20 seconds (avoid SCM container restart)
         run: sleep 20
