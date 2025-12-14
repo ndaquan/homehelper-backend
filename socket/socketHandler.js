@@ -5,6 +5,8 @@ const Tasker = require('../models/Tasker');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const Notification = require('../models/Notification');
+const { notifySosRequestToTaskers } = require('../services/notification.service');
+const AudioCallHandler = require('./audioCallHandler');
 
 class SocketHandler {
   constructor(io) {
@@ -14,7 +16,10 @@ class SocketHandler {
     this.typingUsers = new Map(); // Map<conversationId, Set<userId>>
     this.joinedRooms = new Map(); // Map<socketId, Set<roomName>>
     this.readThrottle = new Map(); // Map<userId:conversationId, timestamp>
-    
+
+    // Khởi tạo AudioCallHandler
+    this.audioCallHandler = new AudioCallHandler(io, this);
+
     this.setupMiddleware();
     this.setupEventHandlers();
   }
@@ -24,7 +29,7 @@ class SocketHandler {
     this.io.use(async (socket, next) => {
       try {
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
-        
+
         if (!token) {
           return next(new Error('Không có token xác thực'));
         }
@@ -36,7 +41,7 @@ class SocketHandler {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const userId = decoded.user_id ?? decoded.userId;
         const user = await User.findById(userId);
-        
+
         if (!user) {
           return next(new Error('User không tồn tại'));
         }
@@ -52,37 +57,45 @@ class SocketHandler {
 
   // Thiết lập các event handlers
   setupEventHandlers() {
-  this.io.on('connection', async (socket) => {
+    this.io.on('connection', async (socket) => {
       // Lưu thông tin kết nối
       if (!this.connectedUsers.has(socket.userId)) {
         this.connectedUsers.set(socket.userId, new Set());
       }
       this.connectedUsers.get(socket.userId).add(socket.id);
       this.userSockets.set(socket.id, socket.userId);
+      try {
+        // Join a per-user room for targeted emits from services
+        const userRoom = `user_${socket.userId}`;
+        socket.join(userRoom);
+        console.log(`✅ User ${socket.userId} joined room: ${userRoom}`);
+      } catch (e) {
+        console.warn('Could not join user room for socket:', e?.message || e);
+      }
       this.joinedRooms.set(socket.id, new Set());
 
 
-    // Log danh sách user online sau mỗi kết nối mới
-    console.log('Current online users:', Array.from(this.connectedUsers.keys()));
+      // Log danh sách user online sau mỗi kết nối mới
+      console.log('Current online users:', Array.from(this.connectedUsers.keys()));
 
-    // Gửi thông báo user online
-    this.broadcastUserStatus(socket.userId, 'online');
+      // Gửi thông báo user online
+      this.broadcastUserStatus(socket.userId, 'online');
 
-    // Nếu user là Tasker thì cập nhật trạng thái "Hoạt động"
-    try {
-      if (socket.user?.role === 'Tasker') {
-        await Tasker.updateStatus(socket.userId, 'Hoạt động');
+      // Nếu user là Tasker thì cập nhật trạng thái "Hoạt động"
+      try {
+        if (socket.user?.role === 'Tasker') {
+          await Tasker.updateStatus(socket.userId, 'Hoạt động');
+        }
+      } catch (e) {
+        console.error('Không thể cập nhật trạng thái Tasker khi connect:', e?.message || e);
       }
-    } catch (e) {
-      console.error('Không thể cập nhật trạng thái Tasker khi connect:', e?.message || e);
-    }
 
-    // Gửi danh sách user online cho riêng socket mới connect
-    console.log(`📤 Emit online_users cho user ${socket.userId}`);
-    socket.emit('online_users', this.getOnlineUsers());
-    // Gửi danh sách user online cho toàn bộ client (nếu muốn cập nhật realtime cho các client khác)
-    console.log('📤 Emit online_users cho toàn bộ client');
-    this.io.emit('online_users', this.getOnlineUsers());
+      // Gửi danh sách user online cho riêng socket mới connect
+      console.log(`📤 Emit online_users cho user ${socket.userId}`);
+      socket.emit('online_users', this.getOnlineUsers());
+      // Gửi danh sách user online cho toàn bộ client (nếu muốn cập nhật realtime cho các client khác)
+      console.log('📤 Emit online_users cho toàn bộ client');
+      this.io.emit('online_users', this.getOnlineUsers());
 
       // Đăng ký events
       socket.on('join_conversation', (data) => this.handleJoinConversation(socket, data));
@@ -95,6 +108,9 @@ class SocketHandler {
       socket.on('disconnect', () => this.handleDisconnect(socket));
       socket.on('create_sos_job', (data) => this.handleCreateSOSJob(socket, data));
       socket.on('accept_sos_job', (data) => this.handleAcceptSOSJob(socket, data));
+
+      // Audio call events
+      this.audioCallHandler.setupSocketListeners(socket);
     });
   }
 
@@ -209,7 +225,7 @@ class SocketHandler {
                 senderName: socket.user.name,
                 content: content.length > 100 ? content.substring(0, 100) + '...' : content
               });
-            });v
+            }); v
           }
         } catch (err) {
           console.error('Lỗi tạo notification:', err);
@@ -220,7 +236,7 @@ class SocketHandler {
       socket.emit('error', { message: 'Lỗi gửi tin nhắn' });
     }
   }
-async handleCreateSOSJob(socket, data) {
+  async handleCreateSOSJob(socket, data) {
     console.log('📩 handleCreateSOSJob called by user:', socket.userId, 'role:', socket.user?.role);
 
     if (socket.user?.role !== 'Customer') {
@@ -445,7 +461,7 @@ async handleCreateSOSJob(socket, data) {
     console.log(`\n[SOS ACCEPT] ====== STARTING handleAcceptSOSJob ======`);
     console.log(`[SOS ACCEPT] socket.userId: ${socket.userId}, socket.user?.role: ${socket.user?.role}`);
     console.log(`[SOS ACCEPT] data:`, data);
-    
+
     if (socket.user?.role !== 'Tasker') {
       console.log(`[SOS ACCEPT] ❌ User is not Tasker, rejecting`);
       return socket.emit('error', { message: 'Chỉ Tasker mới được nhận SOS job' });
@@ -461,7 +477,7 @@ async handleCreateSOSJob(socket, data) {
 
     try {
       console.log(`[SOS ACCEPT] Executing UPDATE query...`);
-      
+
       const result = await executeQuery(`
         BEGIN TRAN;
 
@@ -493,7 +509,7 @@ async handleCreateSOSJob(socket, data) {
 
       if (taken) {
         console.log(`[SOS] Job #${booking_id} → ĐÃ CẬP NHẬT (${affectedRows} row affected) với tasker_id=${socket.userId}`);
-        
+
         // Broadcast broadly and also notify only taskers who received the job
         const takenPayload = {
           booking_id,
@@ -528,14 +544,14 @@ async handleCreateSOSJob(socket, data) {
         const custRes = await executeQuery(`SELECT customer_id FROM Bookings WHERE booking_id = @id`, { id: booking_id });
         const customerId = custRes.recordset?.[0]?.customer_id;
         console.log(`[SOS] Looking for customer socket - customerId: ${customerId}, connectedUsers:`, Array.from(this.connectedUsers.keys()));
-        
+
         const acceptedPayload = {
           booking_id,
           taken_by_tasker_id: socket.userId,
           taken_by_name: socket.user.name,
           message: 'Có Tasker đã nhận công việc của bạn!'
         };
-        
+
         const custSockets = this.connectedUsers.get(customerId);
         if (custSockets && custSockets.size > 0) {
           console.log(`[SOS] Found customer socket(s) for customer ${customerId}:`, custSockets.size);
@@ -550,9 +566,9 @@ async handleCreateSOSJob(socket, data) {
           this.io.emit('sos_job_accepted', acceptedPayload);
         }
 
-        socket.emit('sos_accept_success', { 
-          booking_id, 
-          message: 'Chúc mừng! Bạn đã nhận được công việc!' 
+        socket.emit('sos_accept_success', {
+          booking_id,
+          message: 'Chúc mừng! Bạn đã nhận được công việc!'
         });
 
         console.log(`[SOS] Job #${booking_id} → ĐÃ CHẤP NHẬN bởi Tasker ${socket.userId}`);
@@ -673,10 +689,14 @@ async handleCreateSOSJob(socket, data) {
           }
         }
       }
-  this.userSockets.delete(socket.id);
-  // Log danh sách user online trước khi gửi cho FE
-  console.log('Emit online_users after disconnect:', this.getOnlineUsers());
-  this.io.emit('online_users', this.getOnlineUsers());
+      this.userSockets.delete(socket.id);
+
+      // Handle audio call cleanup
+      await this.audioCallHandler.handleDisconnect(socket);
+
+      // Log danh sách user online trước khi gửi cho FE
+      console.log('Emit online_users after disconnect:', this.getOnlineUsers());
+      this.io.emit('online_users', this.getOnlineUsers());
     } catch (error) {
       console.error('Lỗi disconnect:', error);
     }

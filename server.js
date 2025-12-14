@@ -108,6 +108,8 @@ app.use("/api/evidence", require("./routes/evidence"))
 // app.use('/api/bookings', require('./routes/bookings'));
 // app.use('/api/posts', require('./routes/posts'));
 app.use('/api/system-reports', require('./routes/systemReports'));
+app.use('/api/chatbot', require('./routes/chatbot'));
+app.use('/api/audio-calls', require('./routes/audioCallRoutes'));
 
 // Health check endpoint
 app.get("/health", (req, res) => {
