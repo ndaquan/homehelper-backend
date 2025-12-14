@@ -67,4 +67,4 @@ jobs:
         with:
           app-name: 'homehelper-api-dev'
           slot-name: 'Production'
-          package: node app
+          package: ./node-app
