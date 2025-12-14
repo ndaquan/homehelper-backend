@@ -22,7 +22,7 @@ const authenticateToken = async (req, res, next) => {
     if (process.env.NODE_ENV !== 'production') {
       console.log('🔓 Decoded JWT:', decoded);
     }
-    
+
     // Kiểm tra user có tồn tại không
     const user = await User.findById(decoded.userId);
     if (process.env.NODE_ENV !== 'production') {
@@ -42,7 +42,7 @@ const authenticateToken = async (req, res, next) => {
       role: decoded.role,
       email: user.email
     };
-    
+
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
@@ -50,7 +50,7 @@ const authenticateToken = async (req, res, next) => {
         error: 'Token đã hết hạn'
       });
     }
-    
+
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         error: 'Token không hợp lệ'
@@ -92,7 +92,7 @@ const requireAdmin = authorizeRole('Admin');
 const requireTasker = authorizeRole('Tasker', 'Admin');
 
 // Middleware kiểm tra quyền customer
-const requireCustomer = authorizeRole('Customer', 'Admin','User');
+const requireCustomer = authorizeRole('Customer', 'Admin', 'User');
 
 // Middleware kiểm tra quyền user đã đăng nhập
 const requireAuth = (req, res, next) => {
@@ -121,7 +121,7 @@ const requireOwnership = (resourceType) => {
 
       // Kiểm tra quyền sở hữu dựa trên resource type
       const resourceId = req.params.id || req.params.userId || req.params.postId;
-      
+
       if (!resourceId) {
         return res.status(400).json({
           error: 'Thiếu ID resource'

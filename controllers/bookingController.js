@@ -380,6 +380,89 @@ class BookingController {
     }
   }
 
+  static async updateStatusSOS(req, res) {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      // If a tasker accepts a booking (Đã chấp nhận) and booking.tasker_id is NULL,
+      // set the tasker_id to the current authenticated user.
+      const userId = req.user?.userId || null;
+      console.log(`[BOOKING] updateStatusSOS called - booking_id: ${id}, status: ${status}, tasker_id: ${userId}`);
+
+      const query = `
+        BEGIN TRAN;
+        IF @status = N'Đã chấp nhận'
+        BEGIN
+          UPDATE Bookings
+          SET tasker_id = CASE WHEN tasker_id IS NULL THEN @userId ELSE tasker_id END,
+              status = @status
+          WHERE booking_id = @id;
+        END
+        ELSE
+        BEGIN
+          UPDATE Bookings SET status = @status WHERE booking_id = @id;
+        END
+        COMMIT;
+      `;
+
+      await executeQuery(query, { id, status, userId });
+      console.log(`[BOOKING] Status updated successfully for booking ${id}`);
+
+      // If status is "Đã chấp nhận" for an SOS booking, notify customer via socket
+      if (status === 'Đã chấp nhận') {
+        try {
+          console.log(`[BOOKING] Checking if booking ${id} is SOS type...`);
+          const bookingRes = await executeQuery(
+            `SELECT booking_id, customer_id, type, tasker_id FROM Bookings WHERE booking_id = @id`,
+            { id }
+          );
+
+          if (bookingRes.recordset && bookingRes.recordset.length > 0) {
+            const booking = bookingRes.recordset[0];
+            const isSOS = booking.type === 'SOS';
+            console.log(`[BOOKING] Booking type: ${booking.type}, isSOS: ${isSOS}`);
+
+            if (isSOS) {
+              const io = req.app.get('io');
+              if (io) {
+                console.log(`[BOOKING] Emitting sos_job_accepted to customer ${booking.customer_id}`);
+
+                // Get tasker info
+                const taskerRes = await executeQuery(
+                  `SELECT user_id, name FROM Users WHERE user_id = @userId`,
+                  { userId }
+                );
+
+                const taskerName = taskerRes.recordset?.[0]?.name || 'Tasker';
+                const acceptedPayload = {
+                  booking_id: id,
+                  taken_by_tasker_id: userId,
+                  taken_by_name: taskerName,
+                  message: 'Tasker đã nhận công việc của bạn từ API'
+                };
+
+                // Broadcast to all users as fallback (customer might be on any page)
+                io.emit('sos_job_accepted', acceptedPayload);
+                console.log(`[BOOKING] Broadcasted sos_job_accepted:`, acceptedPayload);
+              } else {
+                console.warn(`[BOOKING] ❌ io instance not found in req.app`);
+              }
+            }
+          }
+        } catch (socketErr) {
+          console.error(`[BOOKING] ❌ Error emitting socket event:`, socketErr);
+          // Don't fail the API response due to socket error
+        }
+      }
+
+      res.json({ success: true, message: `Cập nhật trạng thái: ${status}` });
+    } catch (error) {
+      console.error("❌ Lỗi updateStatusSOS:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   static async updateStatus(req, res) {
     try {
       const { id } = req.params;
@@ -1452,5 +1535,6 @@ module.exports = {
   getAdminReview: BookingController.getAdminReview,
   getAdminList: BookingController.getAdminList,
   adminResolveComplaint: BookingController.adminResolveComplaint,
-  completeJob: BookingController.completeJob
+  completeJob: BookingController.completeJob,
+  updateStatusSOS: BookingController.updateStatusSOS,
 };

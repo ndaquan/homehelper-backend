@@ -35,6 +35,9 @@ router.patch("/:id/status", authenticateToken, requireTasker, bookingController.
 // Check if SOS booking is still available (not taken by someone else)
 router.get("/:id/sos-check", authenticateToken, requireTasker, checkSosAvailability);
 
+// SOS status update (separate function)
+router.patch("/:id/status-sos", authenticateToken, requireTasker, bookingController.updateStatusSOS);
+
 // 5️⃣ Khách hàng xem danh sách Booking của mình
 router.get("/mybookings", authenticateToken, bookingController.listMyBookings);
 
