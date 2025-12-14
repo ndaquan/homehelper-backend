@@ -1953,3 +1953,63 @@ exports.rejectCertifications = async (req, res) => {
   }
 };
 
+exports.startChecklistTimer = async (req, res) => {
+    try {
+        const { bookingId, taskId } = req.params;
+        const { checklist_key, session_date } = req.body;
+
+        console.log("⏱ Start timer:", { bookingId, taskId, checklist_key, session_date });
+
+        await executeQuery(
+            `INSERT INTO TaskChecklistTimers 
+             (booking_id, task_id, checklist_key, start_time, session_date)
+             VALUES (@param1, @param2, @param3, GETDATE(), @param4)`,
+            [bookingId, taskId, checklist_key, session_date || null]
+        );
+
+        res.json({
+            success: true,
+            message: "Checklist timer started"
+        });
+
+    } catch (err) {
+        console.error("❌ startChecklistTimer error:", err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to start timer"
+        });
+    }
+};
+
+exports.endChecklistTimer = async (req, res) => {
+    try {
+        const { bookingId, taskId } = req.params;
+        const { checklist_key } = req.body;
+
+        console.log("⏳ End timer:", { bookingId, taskId, checklist_key });
+
+        const result = await executeQuery(
+            `UPDATE TaskChecklistTimers
+             SET end_time = GETDATE(),
+                 duration_seconds = DATEDIFF(SECOND, start_time, GETDATE())
+             WHERE booking_id = @param1
+             AND task_id = @param2
+             AND checklist_key = @param3
+             AND end_time IS NULL`,
+            [bookingId, taskId, checklist_key]
+        );
+
+        res.json({
+            success: true,
+            message: "Checklist timer ended"
+        });
+
+    } catch (err) {
+        console.error("❌ endChecklistTimer error:", err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to end timer"
+        });
+    }
+};
+

@@ -78,7 +78,8 @@ exports.payForBooking = async (req, res) => {
           b.tasker_id,
           b.status,
           b.final_price,
-          b.expected_price 
+          b.expected_price,
+          b.quantity
         FROM Bookings b
         WHERE b.booking_id = @booking_id
       `);
@@ -95,12 +96,22 @@ exports.payForBooking = async (req, res) => {
       return res.status(403).json({ success: false, message: "You cannot pay for this booking" });
     }
 
-    // 2) Lấy giá gốc
-    let price = Number(booking.final_price);
+    // 2) Lấy giá gốc / đơn vị
+    let unitPrice = Number(booking.final_price) > 0
+      ? Number(booking.final_price)
+      : Number(booking.expected_price);
 
-    if (!price || price <= 0) {
-      price = Number(booking.expected_price);
-    }
+    console.log("💲 Unit price per unit:", unitPrice);
+
+    // 3) Lấy quantity từ DB
+    let quantity = Number(booking.quantity) || 1;
+    console.log("🔢 Quantity:", quantity);
+
+    // 4) Tính subtotal (tổng trước voucher)
+    let subtotal = unitPrice * quantity;
+    console.log("🧮 Subtotal (unitPrice × quantity):", subtotal);
+
+    let total = subtotal;
 
     // 3) Nếu có voucher_id → BE tự kiểm tra
     if (voucher_id) {
@@ -121,14 +132,22 @@ exports.payForBooking = async (req, res) => {
       if (new Date(voucher.expiry_date) < new Date())
         return res.status(400).json({ success: false, message: "Voucher đã hết hạn" });
 
-      // Áp dụng giảm giá
-      price = Math.round(price * (1 - voucher.discount));
+      console.log("🎁 Voucher detected:", voucher);
 
-      console.log("💳 Applied voucher:", voucher.discount * 100 + "%");
-      console.log("💰 Price after discount:", price);
+      if (voucher.type === "percent") {
+        total = Math.round(subtotal * (1 - voucher.discount));
+      } else {
+        total = subtotal - voucher.discount;
+        if (total < 0) total = 0;
+      }
+
+      console.log("🏷️ Price after voucher:", total);
     }
 
-    const toPay = price;
+    let toPay = total;
+
+    console.log("💰 Final amount to pay:", toPay);
+
     if (!toPay || toPay <= 0) {
       return res.status(400).json({ success: false, message: "Invalid amount to pay" });
     }
@@ -151,7 +170,8 @@ exports.payForBooking = async (req, res) => {
     console.log("💰 Begin insert WalletTransactions...");
 
     // 3.1) Ghi giao dịch debit
-    await reqTx
+    const txReq1 = new sql.Request(tx);
+    await txReq1
       .input("user_id", sql.Int, user_id)
       .input("amount", sql.Money, toPay)
       .input("type", sql.NVarChar, "debit")
@@ -165,7 +185,8 @@ exports.payForBooking = async (req, res) => {
     console.log("✅ Insert done");
 
     // 3.2) Cập nhật trạng thái booking = "Đã thanh toán"
-    await reqTx
+    const txReq2 = new sql.Request(tx);
+    await txReq2
       .input("booking_id", sql.Int, booking_id)
       .query(`
         UPDATE Bookings
@@ -173,22 +194,23 @@ exports.payForBooking = async (req, res) => {
         WHERE booking_id = @booking_id;
       `);
 
-    // 3.2.1) Lưu final_price đúng với số tiền khách đã trả
-    await reqTx
+    // 3.2.1) Lưu paid_amount đúng với số tiền khách đã trả
+    const txReq3 = new sql.Request(tx);
+    await txReq3
       .input("booking_id", sql.Int, booking_id)
-      .input("final_price", sql.Money, toPay)
+      .input("paid_amount", sql.Money, toPay)
       .input("voucher_id", sql.Int, voucher_id || null)
       .query(`
         UPDATE Bookings
-        SET final_price = @final_price,
-            base_price = @final_price,      -- optional nhưng nên set cho đồng bộ
-            used_voucher_id = @voucher_id   -- nếu bạn muốn lưu voucher_id
+        SET paid_amount = @paid_amount,
+        used_voucher_id = @voucher_id
         WHERE booking_id = @booking_id;
       `);
 
     // 3.3) Đánh dấu voucher đã dùng (nếu có)
     if (voucher_id) {
-      await reqTx
+      const txReq4 = new sql.Request(tx);
+      await txReq4
         .input("voucher_id", sql.Int, voucher_id)
         .query(`
           UPDATE Vouchers

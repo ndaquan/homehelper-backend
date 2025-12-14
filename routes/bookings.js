@@ -4,6 +4,7 @@ const {
   authenticateToken,
   requireCustomer,
   requireTasker,
+  requireAdmin
 } = require("../middleware/auth");
 const bookingController = require("../controllers/bookingController");
 const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getTaskerBookings, getActiveSosJobs, checkSosAvailability } = require("../controllers/bookingController");
@@ -11,6 +12,13 @@ const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getT
 const sessionController = require("../controllers/sessionController");
 const { taskPhotosUpload, memoryUpload } = require("../config/cloudinary");
 const bookingCancelController = require("../controllers/bookingCancelController");
+
+router.get(
+  "/admin-list",
+  authenticateToken,
+  requireAdmin,
+  bookingController.getAdminList
+);
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
 router.post(
@@ -35,9 +43,6 @@ router.get("/customer/active-sos", authenticateToken, bookingController.getActiv
 
 // Get active SOS jobs for tasker (only those not expired and matching their service variants)
 router.get("/tasker/active-sos", authenticateToken, requireTasker, getActiveSosJobs);
-
-// Adding authenticateToken to the booking detail route
-router.get("/:id", authenticateToken, bookingController.getBookingDetail);
 
 // 4️⃣ Khách hàng kiểm tra quyền đánh giá Tasker
 router.get(
@@ -81,5 +86,36 @@ router.patch(
 
 // TODO: Implement cancelBooking function in bookingController if needed
 router.post("/:id/cancel", authenticateToken, bookingCancelController.cancelBooking);
+
+router.patch("/:id/notes", bookingController.updateNotes);
+
+router.get(
+  "/info/:id",
+  authenticateToken,
+  bookingController.getBookingById
+);
+
+router.patch(
+  "/:id/complaint",
+  authenticateToken,
+  requireCustomer,
+  (memoryUpload || taskPhotosUpload).array("images", 10),
+  bookingController.submitComplaint
+);
+
+router.get(
+  "/:id/admin-review",
+  authenticateToken,
+  bookingController.getAdminReview
+);
+
+// Adding authenticateToken to the booking detail route
+router.get("/:id", authenticateToken, bookingController.getBookingDetail);
+
+router.patch("/:id/admin-resolve", authenticateToken, requireAdmin, bookingController.adminResolveComplaint);
+
+router.patch(
+  "/:bookingId/complete", authenticateToken, bookingController.completeJob
+);
 
 module.exports = router;
