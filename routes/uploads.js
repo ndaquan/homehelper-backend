@@ -8,6 +8,7 @@ const {
   handleTaskPhotosUpload,
   memoryUpload,
 } = require("../config/cloudinary");
+const { executeQuery } = require("../config/database");
 const ImageEncryption = require("../utils/imageEncryption");
 
 const router = express.Router();
@@ -71,17 +72,53 @@ router.post(
     }
   }
 );
+
 router.post(
-  "/task-photos/before/:taskId",
+  "/task-photos/:type/:bookingId",
   authenticateToken,
   (taskPhotosUpload || memoryUpload).array("photos", 10),
-  handleTaskPhotosUpload("before")
-);
-router.post(
-  "/task-photos/after/:taskId",
-  authenticateToken,
-  (taskPhotosUpload || memoryUpload).array("photos", 10),
-  handleTaskPhotosUpload("after")
+  async (req, res) => {
+    try {
+      const { type, bookingId } = req.params;
+      const uploadedBy =
+        req.user?.userId || req.user?.user_id || null; // Tasker ID từ token
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ success: false, message: "No files uploaded" });
+      }
+
+      const inserted = [];
+
+      for (const file of req.files) {
+        const photoUrl = file.path || `/uploads/task-photos/${file.filename}`;
+
+        const query = `
+          INSERT INTO TaskPhotos (booking_id, photo_url, photo_type, uploaded_by)
+          OUTPUT inserted.*
+          VALUES (@param1, @param2, @param3, @param4)
+        `;
+
+        const params = [
+          bookingId,       
+          photoUrl,
+          type,
+          uploadedBy
+        ];
+
+        const result = await executeQuery(query, params);
+        inserted.push(result.recordset[0]);
+      }
+
+      return res.json({
+        success: true,
+        message: "Photos uploaded successfully",
+        data: inserted,
+      });
+    } catch (err) {
+      console.error("Upload error:", err);
+      return res.status(500).json({ success: false, message: "Upload failed", error: err.message });
+    }
+  }
 );
 
 // POST /api/uploads/avatar - Upload avatar với encryption

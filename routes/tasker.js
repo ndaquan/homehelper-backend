@@ -116,4 +116,19 @@ router.get('/:id/badges', badgeController.getBadgesForTasker);
 
 // Generic tasker by id - MUST be last to avoid matching other routes
 router.get("/:id", taskerController.getById);
+
+// Bắt đầu timer checklist
+router.post(
+  "/bookings/:bookingId/tasks/:taskId/timer/start",
+  authenticateToken,
+  taskerController.startChecklistTimer
+);
+
+// Kết thúc timer checklist
+router.post(
+  "/bookings/:bookingId/tasks/:taskId/timer/end",
+  authenticateToken,
+  taskerController.endChecklistTimer
+);
+
 module.exports = router;

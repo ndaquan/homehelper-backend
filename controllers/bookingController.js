@@ -2,6 +2,9 @@ const { executeQuery } = require("../config/database");
 const Booking = require("../models/Booking");
 const { updateReliabilityScore } = require("../services/reliabilityScore.service");
 const { notifyBookingEvent, notifySosRequestToTaskers } = require("../services/notification.service");
+const { getPool, sql } = require("../config/database");
+const { cloudinary, certificateUpload } = require('../config/cloudinary');
+const sharp = require("sharp");
 
 class BookingController {
   // ============================================
@@ -20,26 +23,47 @@ class BookingController {
         end_time,
         location,
         expected_price,
+        quantity,
         task
       } = req.body;
 
       // Allow FE to specify booking type (e.g., 'SOS') else default
       const type = req.body.type || "Cơ bản";
 
+      const safeQuantity = quantity !== undefined ? Number(quantity) : null;
+
+      console.log("📩 [DEBUG] Body nhận từ FE:", req.body);
+      console.log("🔢 [BE] Quantity FE gửi lên (raw):", quantity);
+      console.log("🔢 [BE] Quantity sau khi ép Number():", safeQuantity);
+
       const query = `
         INSERT INTO Bookings (
           customer_id, tasker_id, service_id, variant_id,
           booking_time, start_time, end_time, location,
-          status, expected_price, type
+          status, expected_price, quantity, type
         )
         VALUES (
           @customer_id, @tasker_id, @service_id, @variant_id,
           GETDATE(), @start_time, @end_time, @location,
-          N'Chờ xử lý', @expected_price, @type
+          N'Chờ xử lý', @expected_price, @quantity, @type
         );
 
         SELECT SCOPE_IDENTITY() AS booking_id;
       `;
+
+      // Log param trước khi đẩy xuống SQL
+      console.log("🧪 [BE] Params gửi xuống SQL:", {
+        customer_id,
+        tasker_id,
+        service_id,
+        variant_id,
+        start_time,
+        end_time,
+        location,
+        expected_price,
+        quantity: safeQuantity,
+        type,
+      });
 
       // 🧠 Thực thi query
       const result = await executeQuery(query, {
@@ -51,8 +75,11 @@ class BookingController {
         end_time,
         location,
         expected_price,
+        quantity: safeQuantity,
         type,
       });
+
+      console.log("📥 [BE] SQL Insert result:", result);
 
       // ✅ Lấy booking_id chính xác
       const bookingId = result?.recordset?.[0]?.booking_id;
@@ -130,37 +157,124 @@ class BookingController {
   }
 
   static async getBookingById(req, res) {
+    console.log("📥 [API] getBookingById CALLED");
+    console.log("📥 [API] params.id =", req.params.id);
+
+    const bookingId = req.params.id;
+
     try {
-      const bookingId = req.params.id;
+      const pool = await getPool();
 
-      const query = `
-      SELECT 
-        b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
-        b.booking_time, b.start_time, b.end_time, b.location, b.status,
-        b.expected_price, b.job_description, b.photos,
-        t.name AS tasker_name,
-        s.service_name,
-        v.variant_name
-      FROM Bookings b
-      LEFT JOIN Taskers t ON b.tasker_id = t.tasker_id
-      LEFT JOIN Services s ON b.service_id = s.service_id
-      LEFT JOIN ServiceVariants v ON b.variant_id = v.variant_id
-      WHERE b.booking_id = @bookingId;
-    `;
+      // 1) Booking + Service + Variant + Task
+      const bookingResult = await pool.request()
+        .input("bookingId", sql.Int, bookingId)
+        .query(`
+        SELECT 
+          b.booking_id,
+          b.customer_id,
+          b.tasker_id,
+          b.service_id,
+          b.variant_id,
+          b.booking_time,
+          b.start_time,
+          b.end_time,
+          b.location,
+          b.status,
+          b.type,
+          b.shared,
+          b.base_price,
+          b.surcharge,
+          b.final_price,
+          b.expected_price,
+          b.paid_amount,
+          b.used_voucher_id,
+          b.notes,
 
-      const result = await executeQuery(query, { bookingId });
+          /* SERVICE */
+          COALESCE(s.name, '') AS service_name,
+          COALESCE(s.description, '') AS service_description,
 
-      if (!result.recordset.length) {
-        return res.status(404).json({ success: false, message: "Không tìm thấy booking" });
+          /* VARIANT */
+          COALESCE(v.variant_name, '') AS variant_name,
+          COALESCE(v.pricing_type, '') AS pricing_type,
+          v.price_min,
+          v.price_max,
+          COALESCE(v.unit, '') AS unit,
+
+          /* TASK */
+          COALESCE(ts.description, '') AS task_description,
+          COALESCE(ts.checklist, '') AS task_checklist,
+          COALESCE(ts.completed, 0) AS task_completed,
+          ts.checklist_timers AS checklist_timers,
+
+          /* CUSTOMER INFO */
+          u.name AS customer_name,
+          u.phone AS customer_phone,
+          u.email AS customer_email
+
+        FROM Bookings b
+        LEFT JOIN Users u ON b.customer_id = u.user_id
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants v ON b.variant_id = v.variant_id
+        LEFT JOIN Tasks ts ON b.booking_id = ts.booking_id
+        WHERE b.booking_id = @bookingId
+      `);
+
+      const booking = bookingResult.recordset[0];
+      if (!booking) {
+        return res.status(404).json({ message: "Booking not found" });
       }
 
-      res.json({
-        success: true,
-        booking: result.recordset[0],
-      });
+      console.log("🟩 [API] booking row:", JSON.stringify(booking, null, 2));
+
+      /* 🟦 THÊM NGAY TẠI ĐÂY — SAU KHI LẤY BOOKING TỪ DB */
+      if (booking.checklist_timers) {
+        try {
+          booking.checklist_timers = JSON.parse(booking.checklist_timers);
+        } catch (err) {
+          console.error("JSON parse failed:", err);
+          booking.checklist_timers = {};
+        }
+      } else {
+        booking.checklist_timers = {};
+      }
+
+      // 2) Photos (before/after)
+      const photos = await pool.request()
+        .input("bookingId", sql.Int, bookingId)
+        .query(`
+        SELECT photo_url, photo_type
+        FROM TaskPhotos
+        WHERE booking_id = @bookingId
+      `);
+
+      console.log("🟨 [API] photos raw:", photos.recordset);
+
+      const before_photos = photos.recordset
+        .filter(p => p.photo_type === "before")
+        .map(p => p.photo_url);
+
+      const after_photos = photos.recordset
+        .filter(p => p.photo_type === "after")
+        .map(p => p.photo_url);
+
+      console.log("🟨 [API] before_photos:", before_photos);
+      console.log("🟨 [API] after_photos:", after_photos);
+
+      const responsePayload = {
+        ...booking,
+        before_photos,
+        after_photos,
+      };
+      console.log("🟦 [API] response payload keys:", Object.keys(responsePayload));
+      console.log("🟦 [API] response payload:", JSON.stringify(responsePayload, null, 2));
+
+      return res.json(responsePayload);
+
+
     } catch (error) {
       console.error("❌ Lỗi getBookingById:", error);
-      res.status(500).json({ success: false, message: error.message });
+      return res.status(500).json({ message: "Internal server error", error });
     }
   }
 
@@ -756,6 +870,568 @@ class BookingController {
       return res.status(500).json({ success: false, message: 'Internal server error' });
     }
   }
+
+  static async updateNotes(req, res) {
+    try {
+      const id = req.params.id;
+      const { notes } = req.body || {};
+
+      if (typeof notes === "undefined") {
+        return res.status(400).json({ success: false, message: "Missing notes" });
+      }
+
+      await executeQuery(
+        `UPDATE Bookings SET notes = @param1 WHERE booking_id = @param2`,
+        [notes, id]
+      );
+
+      return res.json({ success: true, message: "Notes updated" });
+    } catch (error) {
+      console.error("❌ Error updateNotes:", error);
+      return res.status(500).json({ success: false, message: "Failed to update notes" });
+    }
+  }
+
+  static async submitComplaint(req, res) {
+    console.log("==============================================");
+    console.log("[Complaint][submit] START");
+
+    const bookingId = parseInt(req.params.id, 10);
+    const customerId = req.user?.userId;
+
+    const type = (req.body?.type || "").trim();
+    const description = (req.body?.description || "").trim();
+    const files = Array.isArray(req.files) ? req.files : [];
+
+    console.log("[Complaint][submit] bookingId:", bookingId);
+    console.log("[Complaint][submit] customerId:", customerId);
+    console.log("[Complaint][submit] type:", type);
+    console.log("[Complaint][submit] description:", description);
+    console.log("[Complaint][submit] filesCount:", files.length);
+
+    try {
+      // Validate input
+      if (!bookingId || !customerId) {
+        console.log("[Complaint][submit] ERROR: Missing IDs");
+        return res.status(400).json({ success: false, message: "Thiếu bookingId hoặc customerId" });
+      }
+
+      if (!type || !description) {
+        console.log("[Complaint][submit] ERROR: Missing type/description");
+        return res.status(400).json({ success: false, message: "Thiếu type hoặc description" });
+      }
+
+      // Validate theo rule loại khiếu nại
+      if (type === "not_quality" && files.length === 0) {
+        console.log("[Complaint][submit] ERROR: not_quality requires images");
+        return res.status(400).json({
+          success: false,
+          message: "Loại 'Công việc không đạt yêu cầu' bắt buộc phải có ảnh"
+        });
+      }
+
+      // Check booking thuộc về customer
+      const owns = await executeQuery(
+        "SELECT booking_id, customer_id FROM Bookings WHERE booking_id = @param1",
+        [bookingId]
+      );
+
+      if (!owns.recordset.length) {
+        console.log("[Complaint][submit] ERROR: Booking not found");
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+      }
+
+      const owner = owns.recordset[0];
+
+      if (String(owner.customer_id) !== String(customerId)) {
+        console.log("[Complaint][submit] ERROR: User not owner");
+        return res.status(403).json({ success: false, message: "Không có quyền khiếu nại booking này" });
+      }
+
+      // --------------------------------------------
+      // UPLOAD ẢNH QUA SHARP + CLOUDINARY
+      // --------------------------------------------
+      let imageUrls = [];
+
+      if (files.length > 0) {
+        console.log("[Complaint][submit] Processing images with Sharp...");
+
+        const folderBase = process.env.CLOUDINARY_FOLDER_BASE || "homehelper";
+        const folder = `${folderBase}/complaints/${bookingId}`;
+
+        for (const file of files) {
+          try {
+            console.log("[Complaint][submit] -> Resizing:", file.originalname);
+
+            const resizedBuffer = await sharp(file.buffer)
+              .resize({ width: 1600 })
+              .jpeg({ quality: 80 })
+              .toBuffer();
+
+            console.log("[Complaint][submit] -> Uploading:", file.originalname);
+
+            const uploadResult = await new Promise((resolve, reject) => {
+              const stream = cloudinary.uploader.upload_stream(
+                { folder, resource_type: "image" },
+                (err, result) => {
+                  if (err) {
+                    console.log("[Complaint][submit] Upload ERROR:", err);
+                    return reject(err);
+                  }
+                  resolve(result);
+                }
+              );
+              stream.end(resizedBuffer);
+            });
+
+            imageUrls.push(uploadResult.secure_url);
+          } catch (err) {
+            console.log("[Complaint][submit] Image process ERROR:", err);
+            return res.status(400).json({
+              success: false,
+              message: "Lỗi xử lý ảnh",
+              error: err.message
+            });
+          }
+        }
+
+        console.log("[Complaint][submit] Uploaded URLs:", imageUrls);
+      }
+
+      // --------------------------------------------
+      // INSERT COMPLAINT
+      // --------------------------------------------
+      console.log("[Complaint][submit] Inserting complaint into database...");
+
+      const insertSql = `
+      INSERT INTO CustomerComplaint (booking_id, customer_id, type, description, image_urls, status)
+      OUTPUT inserted.complaint_id, inserted.created_at
+      VALUES (@param1, @param2, @param3, @param4, @param5, @param6)
+    `;
+
+      const insertRes = await executeQuery(insertSql, [
+        bookingId,
+        customerId,
+        type,
+        description,
+        imageUrls.length ? JSON.stringify(imageUrls) : null,
+        "pending"
+      ]);
+
+      const complaintId = insertRes.recordset[0].complaint_id;
+
+      console.log("[Complaint][submit] Insert OK complaint_id:", complaintId);
+
+      // --------------------------------------------
+      // UPDATE BOOKING STATUS
+      // --------------------------------------------
+      console.log("[Complaint][submit] Updating booking status...");
+
+      await executeQuery(
+        "UPDATE Bookings SET status = N'Xử lí khiếu nại của khách' WHERE booking_id = @param1",
+        [bookingId]
+      );
+
+      console.log("[Complaint][submit] Status updated → Xử lí khiếu nại của khách");
+      console.log("[Complaint][submit] DONE");
+      console.log("==============================================");
+
+      return res.json({
+        success: true,
+        message: "Gửi khiếu nại thành công",
+        data: {
+          complaint_id: complaintId,
+          booking_id: bookingId,
+          type,
+          description,
+          image_urls: imageUrls,
+          complaint_status: "pending",
+          booking_status: "Xử lí khiếu nại của khách"
+        }
+      });
+    } catch (error) {
+      console.log("[Complaint][submit] ERROR:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Gửi khiếu nại thất bại",
+        error: error.message
+      });
+    }
+  }
+
+  static async getAdminReview(req, res) {
+    console.log("==============================================");
+    console.log("[AdminReview][get] START");
+
+    const bookingId = parseInt(req.params.id, 10);
+    console.log("[AdminReview][get] bookingId:", bookingId);
+
+    try {
+      if (!bookingId) {
+        console.log("[AdminReview][get] ERROR: Missing bookingId");
+        return res.status(400).json({ success: false, message: "Thiếu bookingId" });
+      }
+
+      // Lấy booking + job done info
+      const bookingRes = await executeQuery(
+        `SELECT 
+          booking_id,
+          customer_id,
+          tasker_id,
+          notes,
+          status
+        FROM Bookings
+        WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      if (!bookingRes.recordset.length) {
+        console.log("[AdminReview][get] ERROR: Booking not found");
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+      }
+
+      const booking = bookingRes.recordset[0];
+      console.log("[AdminReview][get] Booking found");
+
+      const photoRes = await executeQuery(
+        `SELECT photo_url, photo_type 
+        FROM TaskPhotos 
+        WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      const taskRes = await executeQuery(
+        `SELECT task_id, description, checklist, completed, photos, checklist_timers
+        FROM Tasks
+        WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      const tasks = taskRes.recordset.map(t => {
+        console.log("🟦 [AdminReview] RAW task row:", t);
+
+        const raw = t.checklist || "";
+
+        // giống TaskerJobDone: tách theo dòng
+        const checklist = raw
+          .split("\n")
+          .map(line => line.trim())
+          .filter(line => line.length > 0);
+
+        let photos = [];
+        try {
+          photos = t.photos ? JSON.parse(t.photos) : [];
+        } catch (_) { }
+
+        console.log("🟦 [AdminReview] RAW checklist_timers:", t.checklist_timers);
+
+        let timers = {};
+        try {
+          timers = t.checklist_timers ? JSON.parse(t.checklist_timers) : {};
+        } catch (err) {
+          console.log("❌ [AdminReview] ERROR parsing checklist_timers:", err);
+        }
+
+        console.log("🟩 [AdminReview] Parsed timers:", timers);
+
+        return {
+          task_id: t.task_id,
+          description: t.description,
+          completed: t.completed,
+          checklist_raw: raw,   // giữ bản gốc
+          checklist,            // FE đọc theo dòng
+          photos,
+          timers
+        };
+
+        console.log("🟪 [AdminReview] Final task object:", taskObj);
+
+        return taskObj;
+      });
+
+      const before_photos = photoRes.recordset
+        .filter(p => p.photo_type === "before")
+        .map(p => p.photo_url);
+
+      const after_photos = photoRes.recordset
+        .filter(p => p.photo_type === "after")
+        .map(p => p.photo_url);
+
+      booking.before_photos = before_photos;
+      booking.after_photos = after_photos;
+
+      // Lấy complaint tương ứng
+      const complaintRes = await executeQuery(
+        `SELECT complaint_id, booking_id, customer_id, type, description, image_urls, status, created_at
+       FROM CustomerComplaint
+       WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      const complaint = complaintRes.recordset[0] || null;
+      console.log("[AdminReview][get] hasComplaint:", !!complaint);
+
+      // Parse JSON ảnh
+      if (complaint?.image_urls) {
+        try {
+          complaint.image_urls = JSON.parse(complaint.image_urls);
+        } catch (_) { }
+      }
+
+      console.log("[AdminReview][get] DONE");
+      console.log("==============================================");
+
+      return res.json({
+        success: true,
+        booking,
+        complaint,
+        tasks
+      });
+    } catch (err) {
+      console.log("[AdminReview][get] ERROR:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Lỗi server",
+        error: err.message
+      });
+    }
+  }
+
+  static async getAdminList(req, res) {
+    try {
+      const pool = await getPool();
+
+      const sqlQuery = `
+      SELECT 
+        b.booking_id,
+        b.customer_id,
+        c.name AS customer_name,
+        b.tasker_id,
+        t.name AS tasker_name,
+        s.name AS service_name,
+        b.booking_time,
+        b.status
+      FROM Bookings b
+      LEFT JOIN Users c ON b.customer_id = c.user_id
+      LEFT JOIN Users t ON b.tasker_id = t.user_id
+      LEFT JOIN Services s ON b.service_id = s.service_id
+      ORDER BY b.booking_id DESC
+    `;
+
+      const result = await pool.request().query(sqlQuery);
+
+      return res.json({
+        success: true,
+        data: result.recordset
+      });
+    } catch (error) {
+      console.log("[AdminList] ERROR:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Lỗi tải danh sách",
+        error: error.message
+      });
+    }
+  }
+
+  static async adminResolveComplaint(req, res) {
+    console.log("==============================================");
+    console.log("[AdminReview][resolve] START");
+
+    const bookingId = parseInt(req.params.id, 10);
+    const { decision } = req.body; // "approved" | "rejected"
+    const adminId = req.user?.userId;
+
+    console.log("[AdminReview][resolve] bookingId:", bookingId);
+    console.log("[AdminReview][resolve] decision:", decision);
+
+    try {
+      if (!bookingId || !decision) {
+        console.log("[AdminReview][resolve] Missing inputs");
+        return res.status(400).json({ success: false, message: "Thiếu bookingId hoặc decision" });
+      }
+
+      // Lấy booking + complaint
+      const bookingRes = await executeQuery(
+        "SELECT * FROM Bookings WHERE booking_id = @param1",
+        [bookingId]
+      );
+      const booking = bookingRes.recordset[0];
+
+      if (!booking) {
+        console.log("[AdminReview][resolve] Booking not found");
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+      }
+
+      const complaintRes = await executeQuery(
+        "SELECT * FROM CustomerComplaint WHERE booking_id = @param1",
+        [bookingId]
+      );
+      const complaint = complaintRes.recordset[0];
+
+      if (!complaint) {
+        console.log("[AdminReview][resolve] Complaint not found");
+        return res.status(404).json({ success: false, message: "Không có khiếu nại cho booking này" });
+      }
+
+      // Rule tính tiền (đơn đã thanh toán)
+      const totalPrice =
+        booking.final_price && booking.final_price > 0
+          ? booking.final_price
+          : booking.expected_price || 0;
+
+      // ==========================================
+      // ✔ CASE 1 — APPROVED
+      // ==========================================
+      if (decision === "approved") {
+        console.log("[AdminReview][resolve] CASE: APPROVED");
+
+        // Trừ uy tín tasker (-30)
+        await updateReliabilityScore(booking.tasker_id, -30);
+
+        // Refund FULL cho khách (nếu đã thanh toán)
+        if (totalPrice > 0) {
+          await executeQuery(
+            `INSERT INTO WalletTransactions 
+           (user_id, amount, type, purpose, related_id, note, created_at)
+           VALUES (@param1, @param2, N'refund', N'complaint_approved', @param3, N'Khiếu nại được duyệt', GETDATE())`,
+            [booking.customer_id, totalPrice, bookingId]
+          );
+        }
+
+        // Tặng voucher 10%
+        await executeQuery(
+          `INSERT INTO Vouchers 
+        (user_id, type, discount, used, created_at, source_booking_id)
+        VALUES (@uid, 'compensation', 0.1, 0, GETDATE(), @bid)`,
+          { uid: booking.customer_id, bid: bookingId }
+        );
+
+        // Update trạng thái complaint + booking
+        await executeQuery(
+          "UPDATE CustomerComplaint SET status = 'approved' WHERE complaint_id = @param1",
+          [complaint.complaint_id]
+        );
+
+        await executeQuery(
+          "UPDATE Bookings SET status = N'Khiếu nại được duyệt' WHERE booking_id = @param1",
+          [bookingId]
+        );
+
+        console.log("[AdminReview][resolve] APPROVED DONE");
+
+        return res.json({
+          success: true,
+          message: "Đã duyệt khiếu nại",
+          result: {
+            refund: totalPrice,
+            voucher: "10%",
+            scoreChange: -30
+          }
+        });
+      }
+
+      // ==========================================
+      // ✔ CASE 2 — REJECTED
+      // ==========================================
+      if (decision === "rejected") {
+        console.log("[AdminReview][resolve] CASE: REJECTED");
+
+        const payout = Math.round(totalPrice * 0.9); // 90% cho tasker
+
+        // Cộng tiền cho tasker
+        if (payout > 0) {
+          await executeQuery(
+            `INSERT INTO WalletTransactions 
+          (user_id, amount, type, purpose, related_id, note, created_at)
+          VALUES (@param1, @param2, N'payout', N'complaint_rejected', @param3, N'Khiếu nại bị từ chối', GETDATE())`,
+            [booking.tasker_id, payout, bookingId]
+          );
+        }
+
+        // Cộng uy tín (+5)
+        await updateReliabilityScore(booking.tasker_id, +5);
+
+        // Update complaint + booking
+        await executeQuery(
+          "UPDATE CustomerComplaint SET status = 'rejected' WHERE complaint_id = @param1",
+          [complaint.complaint_id]
+        );
+
+        await executeQuery(
+          "UPDATE Bookings SET status = N'Khiếu nại bị từ chối' WHERE booking_id = @param1",
+          [bookingId]
+        );
+
+        console.log("[AdminReview][resolve] REJECTED DONE");
+
+        return res.json({
+          success: true,
+          message: "Đã từ chối khiếu nại",
+          result: {
+            payout,
+            scoreChange: +5
+          }
+        });
+      }
+
+      return res.status(400).json({ success: false, message: "decision không hợp lệ" });
+
+    } catch (error) {
+      console.log("[AdminReview][resolve] ERROR:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Lỗi server",
+        error: error.message
+      });
+    }
+  }
+
+  static async completeJob(req, res) {
+    console.log("====== [COMPLETE JOB] START ======");
+
+    try {
+      const bookingId = req.params.bookingId;
+      const { checklist_timers } = req.body;
+
+      console.log("📥 Incoming bookingId:", bookingId);
+      console.log("📥 Incoming timers:", checklist_timers);
+
+      if (!bookingId) {
+        console.log("❌ Missing bookingId");
+        return res.status(400).json({ message: "Missing bookingId" });
+      }
+
+      // 1) SAVE CHECKLIST TIMERS → Bảng Tasks
+      console.log("💾 Saving checklist timers to Tasks table...");
+
+      await executeQuery(
+        `
+            UPDATE Tasks
+            SET checklist_timers = @param1
+            WHERE booking_id = @param2
+            `,
+        [JSON.stringify(checklist_timers || {}), bookingId]
+      );
+
+      console.log("✔ Saved timers successfully");
+
+      console.log("====== [COMPLETE JOB] SUCCESS ======");
+      return res.status(200).json({
+        message: "Checklist timers saved",
+        booking_id: bookingId,
+        checklist_timers
+      });
+
+    } catch (err) {
+      console.error("❌ COMPLETE JOB ERROR:", err);
+      return res.status(500).json({
+        message: "Internal server error (completeJob)",
+        error: err.message
+      });
+    }
+  };
+
 }
 
 module.exports = {
@@ -771,4 +1447,10 @@ module.exports = {
   getTaskerBookings: BookingController.getTaskerBookings,
   getActiveSOSBooking: BookingController.getActiveSOSBooking,
   getActiveSosJobs: BookingController.getActiveSosJobs,
+  updateNotes: BookingController.updateNotes,
+  submitComplaint: BookingController.submitComplaint,
+  getAdminReview: BookingController.getAdminReview,
+  getAdminList: BookingController.getAdminList,
+  adminResolveComplaint: BookingController.adminResolveComplaint,
+  completeJob: BookingController.completeJob
 };
