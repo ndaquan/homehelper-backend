@@ -245,6 +245,41 @@ const getCurrentUser = async (req, res) => {
       }
     } catch (_) { }
 
+    // Decrypt avatar_url if encrypted
+    let decryptedAvatarUrl = null;
+    try {
+      if (user.avatar_url) {
+        const ImageEncryption = require('../utils/imageEncryption');
+        decryptedAvatarUrl = ImageEncryption.decrypt(user.avatar_url);
+        // If decryption returns the same value (not encrypted), use original
+        if (decryptedAvatarUrl === user.avatar_url && !user.avatar_url.includes(':')) {
+          decryptedAvatarUrl = user.avatar_url;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to decrypt avatar_url:', e.message);
+      decryptedAvatarUrl = user.avatar_url || null;
+    }
+
+    // Format date_of_birth to YYYY-MM-DD if exists
+    let formattedDateOfBirth = null;
+    if (user.date_of_birth) {
+      try {
+        const date = new Date(user.date_of_birth);
+        if (!isNaN(date.getTime())) {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          formattedDateOfBirth = `${year}-${month}-${day}`;
+        }
+      } catch (e) {
+        // If date is already in YYYY-MM-DD format
+        if (typeof user.date_of_birth === 'string' && /^\d{4}-\d{2}-\d{2}/.test(user.date_of_birth)) {
+          formattedDateOfBirth = user.date_of_birth.split('T')[0];
+        }
+      }
+    }
+
     res.status(200).json({
       user: {
         user_id: user.user_id,
@@ -254,6 +289,9 @@ const getCurrentUser = async (req, res) => {
         phone: user.phone,
         cccd_status: user.cccd_status,
         cccd_url: cccdSigned,
+        date_of_birth: formattedDateOfBirth,
+        bio: user.bio || null,
+        avatar_url: decryptedAvatarUrl,
         created_at: user.created_at,
         updated_at: user.updated_at
       }
@@ -437,6 +475,92 @@ const verifyEmail = async (req, res) => {
   }
 };
 
+// Update profile
+const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { name, phone, date_of_birth, bio, avatar_url } = req.body;
+
+    // Validation
+    if (!name && !phone && !date_of_birth && !bio && !avatar_url) {
+      return res.status(400).json({
+        error: 'Không có dữ liệu để cập nhật'
+      });
+    }
+
+    // Build update data
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (phone !== undefined) updateData.phone = phone;
+    if (date_of_birth !== undefined) updateData.date_of_birth = date_of_birth || null;
+    if (bio !== undefined) updateData.bio = bio || null;
+    if (avatar_url !== undefined) updateData.avatar_url = avatar_url || null;
+
+    // Update user
+    const updatedUser = await User.update(userId, updateData);
+
+    // Format date_of_birth to YYYY-MM-DD if exists
+    let formattedDateOfBirth = null;
+    if (updatedUser.date_of_birth) {
+      try {
+        const date = new Date(updatedUser.date_of_birth);
+        if (!isNaN(date.getTime())) {
+          const year = date.getFullYear();
+          const month = String(date.getMonth() + 1).padStart(2, '0');
+          const day = String(date.getDate()).padStart(2, '0');
+          formattedDateOfBirth = `${year}-${month}-${day}`;
+        }
+      } catch (e) {
+        // If date is already in YYYY-MM-DD format
+        if (typeof updatedUser.date_of_birth === 'string' && /^\d{4}-\d{2}-\d{2}/.test(updatedUser.date_of_birth)) {
+          formattedDateOfBirth = updatedUser.date_of_birth.split('T')[0];
+        }
+      }
+    }
+
+    // Decrypt avatar_url if encrypted
+    let decryptedAvatarUrl = null;
+    try {
+      if (updatedUser.avatar_url) {
+        const ImageEncryption = require('../utils/imageEncryption');
+        decryptedAvatarUrl = ImageEncryption.decrypt(updatedUser.avatar_url);
+        // If decryption returns the same value (not encrypted), use original
+        if (decryptedAvatarUrl === updatedUser.avatar_url && !updatedUser.avatar_url.includes(':')) {
+          decryptedAvatarUrl = updatedUser.avatar_url;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to decrypt avatar_url:', e.message);
+      decryptedAvatarUrl = updatedUser.avatar_url || null;
+    }
+
+    // Build response
+    res.status(200).json({
+      message: 'Cập nhật thông tin thành công!',
+      user: {
+        user_id: updatedUser.user_id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        phone: updatedUser.phone,
+        date_of_birth: formattedDateOfBirth,
+        bio: updatedUser.bio || null,
+        avatar_url: decryptedAvatarUrl,
+        cccd_status: updatedUser.cccd_status,
+        created_at: updatedUser.created_at,
+        updated_at: updatedUser.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Lỗi cập nhật profile:', error);
+    res.status(500).json({
+      error: 'Lỗi server nội bộ',
+      message: error.message
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -445,6 +569,7 @@ module.exports = {
   forgotPassword,
   resetPassword,
   verifyEmail,
+  updateProfile,
   // Google login handler will be attached below
 };
 

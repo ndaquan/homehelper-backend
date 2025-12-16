@@ -105,6 +105,7 @@ class Post {
         p.related_booking_id,
         u.name as author_name,
         u.email as author_email,
+        u.avatar_url as author_avatar_url,
         (SELECT COUNT(*) FROM PostLikes pl WHERE pl.post_id = p.post_id) as likes_count,
         (SELECT COUNT(*) FROM Comments c WHERE c.post_id = p.post_id AND c.parent_comment_id IS NULL) as comments_count
       FROM Posts p
@@ -155,10 +156,6 @@ class Post {
       params.push(user_id);
     }
 
-    // Group by post_id
-    query +=
-      " GROUP BY p.post_id, p.title, p.content, p.post_date, p.status, p.photo_urls, p.related_booking_id, p.likes, p.comments_count, p.created_at, p.updated_at, p.user_id, u.name, u.email";
-
     // Sorting
     query += ` ORDER BY p.${sortBy} ${sortOrder}`;
     query += ` OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
@@ -171,7 +168,9 @@ class Post {
         post.likes = row.likes_count;
         post.comments_count = row.comments_count;
         post.author_name = row.author_name || "Ẩn danh";
-        post.author_email = row.author_email || "";
+        post.author_email = row.author_email || ""; 
+        post.author_avatar_url = row.author_avatar_url;
+
         return post;
       });
 

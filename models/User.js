@@ -6,7 +6,8 @@ class User {
   static async findById(userId) {
     try {
       const query = `
-        SELECT user_id, name, email, role, phone, cccd_status, cccd_verified_at, created_at, updated_at
+        SELECT user_id, name, email, role, phone, cccd_status, cccd_verified_at, 
+               date_of_birth, bio, avatar_url, created_at, updated_at
         FROM users 
         WHERE user_id = @userId
       `;
@@ -27,7 +28,8 @@ class User {
   static async findByEmail(email) {
     try {
       const query = `
-        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, created_at, updated_at
+        SELECT user_id, name, email, password, role, phone, cccd_status, cccd_verified_at, 
+               date_of_birth, bio, avatar_url, created_at, updated_at
         FROM users 
         WHERE email = @email
       `;
@@ -53,6 +55,9 @@ class User {
         "cccd_status",
         "cccd_verified_at",
         "cccd_verified_by",
+        "date_of_birth",
+        "bio",
+        "avatar_url",
       ];
       const updates = [];
       const params = { userId };

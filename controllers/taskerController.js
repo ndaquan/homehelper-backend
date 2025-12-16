@@ -8,6 +8,35 @@ const { cloudinary, certificateUpload } = require('../config/cloudinary');
 const { extractCertificateFromUrl } = require('../config/gemini.service');
 const TaskerApplication = require('../models/TaskerApplication');
 
+exports.getTaskerReputation = async (req, res) => {
+    try {
+        const taskerId = req.params.taskerId;
+
+        const result = await executeQuery(`
+            SELECT tasker_id, reliability_score
+            FROM Taskers
+            WHERE tasker_id = @param1
+        `, [taskerId]);
+
+        const tasker = result.recordset?.[0];
+
+        if (!tasker) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy tasker"
+            });
+        }
+
+        res.json({
+            success: true,
+            reputation: tasker.reliability_score
+        });
+    } catch (err) {
+        console.error("❌ Lỗi getTaskerReputation:", err);
+        res.status(500).json({ success: false, message: err.message });
+    }
+};
+
 // Lấy danh sách variant_id đã đăng ký của tasker
 exports.getRegisteredVariantIds = async (req, res) => {
   try {
@@ -317,10 +346,15 @@ exports.createAddress = async (req, res) => {
     const trimmedAddress = inputAddress.trim();
 
     // Gọi VietMap Search API v3 để lấy ref_id
+    const vietmapKey = process.env.VIETMAP_APIKEY || '1fa61c768541c030585bdd9aa021c5a7e74a477fe7ae2540';
+    if (!vietmapKey) {
+      return res.status(500).json({ message: 'VietMap API key chưa được cấu hình' });
+    }
+    
     console.log(`🔍 Tìm kiếm địa chỉ: ${trimmedAddress}`);
     const searchResponse = await axios.get('https://maps.vietmap.vn/api/search/v3', {
       params: {
-        apikey: process.env.VIETMAP_APIKEY,
+        apikey: vietmapKey,
         text: trimmedAddress,
         layers: 'ADDRESS',
         focus: '16.054407,108.202166' // Trung tâm Đà Nẵng
@@ -366,7 +400,7 @@ exports.createAddress = async (req, res) => {
     console.log(`🔍 Gọi Place API với refid: ${refId}`);
     const placeResponse = await axios.get('https://maps.vietmap.vn/api/place/v3', {
       params: {
-        apikey: process.env.VIETMAP_APIKEY,
+        apikey: vietmapKey,
         refid: refId
       },
       timeout: 5000
@@ -426,12 +460,17 @@ exports.updateAddress = async (req, res) => {
     const trimmedAddress = inputAddress.trim();
 
     // Gọi VietMap Search API v3 để lấy ref_id
+    const vietmapKey = process.env.VIETMAP_APIKEY || '1fa61c768541c030585bdd9aa021c5a7e74a477fe7ae2540';
+    if (!vietmapKey) {
+      return res.status(500).json({ message: 'VietMap API key chưa được cấu hình' });
+    }
+    
     console.log(`🔍 Tìm kiếm địa chỉ để cập nhật: ${trimmedAddress}`);
     const searchResponse = await axios.get(
       "https://maps.vietmap.vn/api/search/v3",
       {
         params: {
-          apikey: process.env.VIETMAP_APIKEY,
+          apikey: vietmapKey,
           text: trimmedAddress,
           layers: "ADDRESS",
           focus: "16.054407,108.202166",
@@ -515,7 +554,7 @@ exports.updateAddress = async (req, res) => {
       "https://maps.vietmap.vn/api/place/v3",
       {
         params: {
-          apikey: process.env.VIETMAP_APIKEY,
+          apikey: vietmapKey,
           refid: refId,
         },
         timeout: 5000,
@@ -744,7 +783,9 @@ exports.getTaskersWithDistance = async (req, res) => {
     // Lấy vị trí user
     const userLocation = await Tasker.getUserLocation(userId);
     if (!userLocation) {
-      return res.status(404).json({ error: 'Không tìm thấy địa chỉ của người dùng' });
+      // User chưa có địa chỉ - trả về empty array thay vì 404
+      // Frontend sẽ hiển thị taskers không có distance
+      return res.status(200).json([]);
     }
 
     const { lat: userLat, lng: userLng } = userLocation;
@@ -1002,7 +1043,7 @@ exports.approveTaskerApplication = async (req, res) => {
     // 2. Insert Taskers row if missing
     const existsTasker = await executeQuery("SELECT tasker_id FROM Taskers WHERE tasker_id=@param1", [app.user_id]);
     if (!existsTasker.recordset.length) {
-      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Active', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
+      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)", [app.user_id, app.introduce || '', (app.certifications||[]).map(c=>c.cert_name).join(', ')]);
     }
     // 3. Variants linking
     if (Array.isArray(app.variants) && app.variants.length) {
@@ -1910,5 +1951,65 @@ exports.rejectCertifications = async (req, res) => {
     console.error('Reject certifications error:', err);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
+};
+
+exports.startChecklistTimer = async (req, res) => {
+    try {
+        const { bookingId, taskId } = req.params;
+        const { checklist_key, session_date } = req.body;
+
+        console.log("⏱ Start timer:", { bookingId, taskId, checklist_key, session_date });
+
+        await executeQuery(
+            `INSERT INTO TaskChecklistTimers 
+             (booking_id, task_id, checklist_key, start_time, session_date)
+             VALUES (@param1, @param2, @param3, GETDATE(), @param4)`,
+            [bookingId, taskId, checklist_key, session_date || null]
+        );
+
+        res.json({
+            success: true,
+            message: "Checklist timer started"
+        });
+
+    } catch (err) {
+        console.error("❌ startChecklistTimer error:", err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to start timer"
+        });
+    }
+};
+
+exports.endChecklistTimer = async (req, res) => {
+    try {
+        const { bookingId, taskId } = req.params;
+        const { checklist_key } = req.body;
+
+        console.log("⏳ End timer:", { bookingId, taskId, checklist_key });
+
+        const result = await executeQuery(
+            `UPDATE TaskChecklistTimers
+             SET end_time = GETDATE(),
+                 duration_seconds = DATEDIFF(SECOND, start_time, GETDATE())
+             WHERE booking_id = @param1
+             AND task_id = @param2
+             AND checklist_key = @param3
+             AND end_time IS NULL`,
+            [bookingId, taskId, checklist_key]
+        );
+
+        res.json({
+            success: true,
+            message: "Checklist timer ended"
+        });
+
+    } catch (err) {
+        console.error("❌ endChecklistTimer error:", err);
+        res.status(500).json({
+            success: false,
+            message: "Failed to end timer"
+        });
+    }
 };
 

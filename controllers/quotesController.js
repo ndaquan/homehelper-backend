@@ -1,5 +1,6 @@
 const { executeQuery, getPool, sql } = require('../config/database');
 const Quote = require('../models/Quotes');
+const { notifyQuoteEvent } = require('../services/notification.service');
 
 const getTaskerIdByUserId = async (userId) => {
   // In our schema, Taskers.tasker_id equals Users.user_id. There's no separate user_id column on Taskers.
@@ -50,6 +51,28 @@ exports.createQuote = async (req, res) => {
     }
 
     const quoteId = await Quote.createQuote(post_id, taskerId, variant_id, Number(proposed_price), proposal?.toString().slice(0, 2000) || '');
+    // Notify customer (post owner) about new quote
+    try {
+      const io = req.app.get('io');
+      const postOwnerRes = await executeQuery(`SELECT user_id FROM Posts WHERE post_id = @param1`, [post_id]);
+      const customerId = postOwnerRes.recordset?.[0]?.user_id;
+      console.log('[quotes.create] emit sent notification', { ioExists: !!io, customerId, taskerId, quoteId });
+      if (io && customerId) {
+        await notifyQuoteEvent(io, {
+          action: 'sent',
+          quote_id: quoteId,
+          post_id,
+          customer_id: customerId,
+          tasker_id: taskerId,
+          variant_id,
+          proposed_price
+        });
+      } else {
+        console.warn('[quotes.create] skip notify: io or customerId missing');
+      }
+    } catch (e) {
+      console.warn('[quotes.create] notifyQuoteEvent failed:', e?.message || e);
+    }
     return res.status(201).json({ success: true, data: { quote_id: quoteId } });
   } catch (err) {
     console.error('createQuote error', err);
@@ -118,6 +141,24 @@ exports.acceptQuote = async (req, res) => {
     await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
 
     await transaction.commit();
+    // Notify tasker
+    try {
+      const io = req.app.get('io');
+      console.log('[quotes.accept] emit accepted notification', { ioExists: !!io, taskerId: quote.tasker_id, quoteId });
+      if (io) {
+        await notifyQuoteEvent(io, {
+          action: 'accepted',
+          quote_id: quoteId,
+          post_id: quote.post_id,
+          customer_id: quote.customer_id,
+          tasker_id: quote.tasker_id,
+          variant_id: quote.variant_id,
+          proposed_price: quote.proposed_price
+        });
+      }
+    } catch (e) {
+      console.warn('[quotes.accept] notifyQuoteEvent failed:', e?.message || e);
+    }
     return res.json({ success: true });
   } catch (err) {
     console.error('acceptQuote error', err);
@@ -155,6 +196,24 @@ exports.approveQuote = async (req, res) => {
     await Quote.rejectOtherQuotesOfPost(quote.post_id, quoteId, transaction);
 
     await transaction.commit();
+    // Notify tasker
+    try {
+      const io = req.app.get('io');
+      console.log('[quotes.approve] emit accepted notification', { ioExists: !!io, taskerId: quote.tasker_id, quoteId });
+      if (io) {
+        await notifyQuoteEvent(io, {
+          action: 'accepted',
+          quote_id: quoteId,
+          post_id: quote.post_id,
+          customer_id: quote.customer_id,
+          tasker_id: quote.tasker_id,
+          variant_id: quote.variant_id,
+          proposed_price: quote.proposed_price
+        });
+      }
+    } catch (e) {
+      console.warn('[quotes.approve] notifyQuoteEvent failed:', e?.message || e);
+    }
     return res.json({ success: true });
   } catch (err) {
     console.error('approveQuote error', err);
@@ -188,6 +247,24 @@ exports.rejectQuote = async (req, res) => {
 
     await Quote.updateQuoteStatus(quoteId, 'Từ chối', transaction);
     await transaction.commit();
+    // Notify tasker
+    try {
+      const io = req.app.get('io');
+      console.log('[quotes.reject] emit rejected notification', { ioExists: !!io, taskerId: quote.tasker_id, quoteId });
+      if (io) {
+        await notifyQuoteEvent(io, {
+          action: 'rejected',
+          quote_id: quoteId,
+          post_id: quote.post_id,
+          customer_id: quote.customer_id,
+          tasker_id: quote.tasker_id,
+          variant_id: quote.variant_id,
+          proposed_price: quote.proposed_price
+        });
+      }
+    } catch (e) {
+      console.warn('[quotes.reject] notifyQuoteEvent failed:', e?.message || e);
+    }
     return res.json({ success: true });
   } catch (err) {
     console.error('rejectQuote error', err);

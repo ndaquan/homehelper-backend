@@ -378,47 +378,30 @@ class SocketHandler {
         start_time: computedStartTime.toISOString(),
         description: task.description,
         final_price: base_price,
-        type: workType || 'Home',
+        type: 'SOS',
         sos_expires_at: sosExpiresAt,
         expires_in_seconds: 600
       };
 
-      if (taskers && taskers.recordset && taskers.recordset.length > 0) {
-        // Get notification ID from first insert (we'll use same for all taskers in this batch)
-        let firstNotificationId = null;
-        
-        // Insert notification to DB for each targeted tasker
-        for (const t of taskers.recordset) {
-          try {
-            // Create DB notification so tasker sees it in their notification center
-            // Using type='Booking' to comply with CHECK constraint
-            const notifRes = await executeQuery(`
-              INSERT INTO Notifications (user_id, title, content, type, data, is_read, created_at, expires_at)
-              VALUES (@userId, @title, @content, @type, @data, 0, GETDATE(), @expiresAt);
-              SELECT SCOPE_IDENTITY() as notification_id;
-            `, {
-              userId: t.tasker_id,
-              title: `🔥 SOS: Công việc gần bạn`,
-              content: (task && task.description) ? String(task.description).substring(0, 200) : 'Có việc SOS mới phù hợp với bạn',
-              type: 'Booking',
-              data: JSON.stringify({ booking_id: bookingId, variant_id, service_name: variantRes.recordset[0].service_name, location: savedLocation, is_sos: true }),
-              expiresAt: sosExpiresAt
-            });
-            
-            // Get notification ID từ kết quả insert
-            const notifId = notifRes && notifRes.recordset && notifRes.recordset[0] ? notifRes.recordset[0].notification_id : null;
-            if (!firstNotificationId && notifId) firstNotificationId = notifId;
-            
-            console.log(`✅ Notification tạo cho tasker ${t.tasker_id} - Notification ID: ${notifId}`);
-          } catch (notifErr) {
-            console.warn('❌ Không thể tạo notification cho tasker', t.tasker_id, notifErr?.message || notifErr);
-          }
+      // Use unified notification service to notify customer + taskers and emit broadcast
+      try {
+        await notifySosRequestToTaskers(this.io, {
+          booking_id: bookingId,
+          customer_id: socket.userId,
+          variant_id,
+          service_id,
+          location: savedLocation,
+        });
+      } catch (notifyErr) {
+        console.warn('[SOS] notifySosRequestToTaskers failed:', notifyErr?.message || notifyErr);
+      }
 
-          // Emit realtime socket event nếu tasker đang online (chỉ emit SOS job, không emit notification)
+      // Additionally emit direct SOS job object to online taskers (for specialized UIs)
+      if (taskers && taskers.recordset && taskers.recordset.length > 0) {
+        for (const t of taskers.recordset) {
           const sockets = this.connectedUsers.get(t.tasker_id);
           if (sockets) {
-            // Emit SOS job để TaskerBookings nhận được realtime - chỉ emit 1 lần cho mỗi tasker
-            const uniqueSid = Array.from(sockets)[0]; // Lấy 1 socket connection duy nhất
+            const uniqueSid = Array.from(sockets)[0];
             if (uniqueSid) {
               this.io.to(uniqueSid).emit('new_sos_job', sosJob);
               console.log(`📢 Emitted new_sos_job to tasker ${t.tasker_id}`);
@@ -664,6 +647,16 @@ class SocketHandler {
       const { notificationId } = data;
       if (!notificationId) return;
       await Notification.markAsRead(notificationId);
+      // Emit updated unread count to this user so FE can refresh the badge immediately
+      try {
+        const unread = await Notification.countUnread(socket.userId);
+        const sockets = this.connectedUsers.get(socket.userId);
+        if (sockets) {
+          sockets.forEach(sid => this.io.to(sid).emit('notifications_unread_count', { unread }));
+        }
+      } catch (e) {
+        console.warn('Không thể emit notifications_unread_count:', e?.message || e);
+      }
     } catch (error) {
       console.error('Lỗi notification read:', error);
     }
