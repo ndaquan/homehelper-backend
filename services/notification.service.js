@@ -273,10 +273,26 @@ async function notifySosRequestToTaskers(io, { booking_id, customer_id, variant_
   }
 }
 
+// Withdrawal notifications
+async function notifyWithdrawalEvent(io, { user_id, amount, status, admin_note }) {
+  const title = status === 'completed' ? 'Yêu cầu rút tiền thành công' : 'Yêu cầu rút tiền bị từ chối';
+  const content = status === 'completed'
+    ? `Yêu cầu rút ${(amount * 1000).toLocaleString('vi-VN')}₫ của bạn đã được duyệt và chuyển khoản thành công.`
+    : `Yêu cầu rút ${(amount * 1000).toLocaleString('vi-VN')}₫ của bạn đã bị từ chối. Lý do: ${admin_note || 'Không có lý do cụ thể'}`;
+
+  return notify(io, {
+    user_id,
+    type: 'payment',
+    title,
+    content,
+    data: { amount, status, admin_note, url: `${CLIENT_BASE_URL}/withdraw-history` }
+  });
+}
 
 module.exports = {
   notify,
   notifyBookingEvent,
   notifySosRequestToTaskers,
   notifyQuoteEvent,
+  notifyWithdrawalEvent,
 };

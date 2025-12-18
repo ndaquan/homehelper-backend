@@ -1,4 +1,3 @@
-// module.exports = TaskerController;
 const Address = require("../models/Address");
 const axios = require("axios");
 const Tasker = require("../models/Tasker");
@@ -7,6 +6,80 @@ const { executeQuery } = require("../config/database");
 const { cloudinary, certificateUpload } = require('../config/cloudinary');
 const { extractCertificateFromUrl } = require('../config/gemini.service');
 const TaskerApplication = require('../models/TaskerApplication');
+
+// Lấy thông tin các session của booking (Tasks + TaskPhotos)
+exports.getBookingSessions = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    if (!bookingId) {
+      return res.status(400).json({ success: false, message: 'Missing bookingId' });
+    }
+
+    // 1. Fetch sessions from Tasks table
+    const tasksQuery = `
+      SELECT 
+        task_id, booking_id, description, checklist, photos, completed, 
+        created_at, checklist_timers, session_number, session_date, 
+        checkin_time, checkout_time, status, notes
+      FROM Tasks
+      WHERE booking_id = @param1
+      ORDER BY session_number ASC, session_date ASC
+    `;
+    const tasksResult = await executeQuery(tasksQuery, [bookingId]);
+    const sessions = tasksResult.recordset || [];
+
+    // 2. Fetch photos from TaskPhotos table
+    const photosQuery = `
+      SELECT photo_id, booking_id, photo_url, photo_type, 
+             uploaded_by, uploaded_at, session_id
+      FROM TaskPhotos
+      WHERE booking_id = @param1
+    `;
+    const photosResult = await executeQuery(photosQuery, [bookingId]);
+    const photos = photosResult.recordset || [];
+
+    // 3. Map photos to sessions
+    const sessionsWithData = sessions.map(session => {
+      // Parse checklist if needed
+      let checklistParsed = session.checklist;
+      try {
+        if (typeof session.checklist === 'string') {
+          checklistParsed = JSON.parse(session.checklist);
+        }
+      } catch (e) { }
+
+      // Parse checklist_timers if needed
+      let timersParsed = session.checklist_timers;
+      try {
+        if (typeof session.checklist_timers === 'string') {
+          timersParsed = JSON.parse(session.checklist_timers);
+        }
+      } catch (e) { }
+
+      // Find photos for this session (session_id in TaskPhotos matches task_id in Tasks)
+      const sessionPhotos = photos.filter(p => p.session_id === session.task_id);
+
+      // Helper to group before/after
+      const beforePhotos = sessionPhotos.filter(p => p.photo_type === 'before').map(p => p.photo_url);
+      const afterPhotos = sessionPhotos.filter(p => p.photo_type === 'after').map(p => p.photo_url);
+
+      return {
+        ...session,
+        checklist: checklistParsed,
+        checklist_timers: timersParsed,
+        photos: {
+          before: beforePhotos,
+          after: afterPhotos
+        }
+      };
+    });
+
+    res.json({ success: true, data: sessionsWithData });
+  } catch (error) {
+    console.error('getBookingSessions error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 exports.getTaskerReputation = async (req, res) => {
   try {
@@ -851,15 +924,18 @@ exports.upgradeToTasker = async (req, res) => {
     let variant_ids = [];
     let certifications = [];
     let introduction_video = null; // optional video object
+    let signature_url = null; // tasker signature URL
     if (req.is('application/json')) {
-      const { introduce: introIn = "", variant_ids: variantsIn = [], certifications: certsIn = [], introduction_video: introVideoIn = null } = req.body || {};
+      const { introduce: introIn = "", variant_ids: variantsIn = [], certifications: certsIn = [], introduction_video: introVideoIn = null, signature_url: signatureIn = null } = req.body || {};
       introduce = introIn;
       variant_ids = Array.isArray(variantsIn) ? variantsIn : [];
       certifications = Array.isArray(certsIn) ? certsIn : [];
       introduction_video = introVideoIn && typeof introVideoIn === 'object' ? introVideoIn : null;
+      signature_url = signatureIn || null;
     } else {
       // multipart: fields come as strings; variant_ids could be JSON or comma string
       introduce = req.body.introduce || "";
+      signature_url = req.body.signature_url || null;
       const rawVariants = req.body.variant_ids;
       if (Array.isArray(rawVariants)) {
         variant_ids = rawVariants.map(v => parseInt(v, 10)).filter(Number.isFinite);
@@ -886,6 +962,16 @@ exports.upgradeToTasker = async (req, res) => {
       }
     }
 
+    // Debug logging
+    console.log('[upgradeToTasker] Request data:', {
+      userId,
+      introduce: introduce?.substring(0, 50),
+      variant_ids,
+      certifications_count: certifications.length,
+      has_video: !!introduction_video,
+      signature_url: signature_url ? 'present' : 'missing'
+    });
+
     // Lấy danh sách dịch vụ tương ứng các variant để kiểm tra yêu cầu chứng chỉ
     let requiredServices = [];
     if (Array.isArray(variant_ids) && variant_ids.length) {
@@ -907,6 +993,7 @@ exports.upgradeToTasker = async (req, res) => {
         }
         const missing = needingCert.filter(s => !map.get(s.service_id));
         if (missing.length) {
+          console.log('[upgradeToTasker] ❌ Missing certificates for services:', missing.map(m => m.name));
           return res.status(400).json({
             success: false,
             message: `Thiếu chứng chỉ cho các dịch vụ: ${missing.map(m => m.name).join(', ')}. Mỗi dịch vụ bắt buộc phải có ít nhất 1 chứng chỉ đính kèm.`
@@ -926,7 +1013,7 @@ exports.upgradeToTasker = async (req, res) => {
     }
     // Simple TaskerApplications table check / create record (assuming table exists); if not, attempt create.
     try {
-      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
+      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), signature_url NVARCHAR(500), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
     } catch (tableErr) { console.warn('⚠️ Could not ensure TaskerApplications table:', tableErr.message); }
     // Prevent duplicate when there's already a Pending or Approved application
     const existingApp = await executeQuery("SELECT TOP 1 application_id, status FROM TaskerApplications WHERE user_id = @param1 AND status IN ('Pending','Approved') ORDER BY application_id DESC", [userId]);
@@ -944,8 +1031,8 @@ exports.upgradeToTasker = async (req, res) => {
     }
     // Insert new application (Pending)
     const appInsert = await executeQuery(
-      "INSERT INTO TaskerApplications (user_id, introduce, variants_json, certifications_json, video_json, status) OUTPUT INSERTED.application_id VALUES (@param1, @param2, @param3, @param4, @param5, 'Pending')",
-      [userId, introduce, JSON.stringify(variant_ids || []), JSON.stringify(certifications || []), JSON.stringify(introduction_video || null)]
+      "INSERT INTO TaskerApplications (user_id, introduce, variants_json, certifications_json, video_json, signature_url, status) OUTPUT INSERTED.application_id VALUES (@param1, @param2, @param3, @param4, @param5, @param6, 'Pending')",
+      [userId, introduce, JSON.stringify(variant_ids || []), JSON.stringify(certifications || []), JSON.stringify(introduction_video || null), signature_url]
     );
     const applicationId = appInsert.recordset?.[0]?.application_id;
 
@@ -1043,7 +1130,7 @@ exports.approveTaskerApplication = async (req, res) => {
     // 2. Insert Taskers row if missing
     const existsTasker = await executeQuery("SELECT tasker_id FROM Taskers WHERE tasker_id=@param1", [app.user_id]);
     if (!existsTasker.recordset.length) {
-      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating) VALUES (@param1, @param2, @param3, N'Hoạt động', 0)", [app.user_id, app.introduce || '', (app.certifications || []).map(c => c.cert_name).join(', ')]);
+      await executeQuery("INSERT INTO Taskers (tasker_id, Introduce, certifications, status, rating, signature_url) VALUES (@param1, @param2, @param3, N'Hoạt động', 0, @param4)", [app.user_id, app.introduce || '', (app.certifications || []).map(c => c.cert_name).join(', '), app.signature_url || null]);
     }
     // 3. Variants linking
     if (Array.isArray(app.variants) && app.variants.length) {
@@ -1968,13 +2055,45 @@ exports.startChecklistTimer = async (req, res) => {
     const { bookingId, taskId } = req.params;
     const { checklist_key, session_date } = req.body;
 
-    console.log("⏱ Start timer:", { bookingId, taskId, checklist_key, session_date });
+    console.log("⏱ Start timer:", { bookingId, taskId, checklist_key });
+
+    // Fetch existing timers from Tasks table
+    const result = await executeQuery(
+      `SELECT checklist_timers FROM Tasks WHERE task_id = @param1`,
+      [taskId]
+    );
+
+    if (!result.recordset || result.recordset.length === 0) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    let timers = {};
+    if (result.recordset[0].checklist_timers) {
+      try {
+        timers = JSON.parse(result.recordset[0].checklist_timers);
+      } catch (e) {
+        console.error("Error parsing checklist_timers:", e);
+        timers = {};
+      }
+    }
+
+    // Start timer for specific key
+    timers[checklist_key] = {
+      ...(timers[checklist_key] || {}),
+      start_time: new Date().toISOString(),
+      // reset end time if restarting? Usually checklist items are done once.
+      // But if user unchecks and rechecks, we might want to overwrite or keep history.
+      // Assuming simple start/end for now as per previous logic which was INSERT.
+      // If we want to overwrite:
+      end_time: null,
+      duration_seconds: null
+    };
 
     await executeQuery(
-      `INSERT INTO TaskChecklistTimers 
-             (booking_id, task_id, checklist_key, start_time, session_date)
-             VALUES (@param1, @param2, @param3, GETDATE(), @param4)`,
-      [bookingId, taskId, checklist_key, session_date || null]
+      `UPDATE Tasks 
+       SET checklist_timers = @param1 
+       WHERE task_id = @param2`,
+      [JSON.stringify(timers), taskId]
     );
 
     res.json({
@@ -1998,21 +2117,51 @@ exports.endChecklistTimer = async (req, res) => {
 
     console.log("⏳ End timer:", { bookingId, taskId, checklist_key });
 
+    // Fetch existing timers
     const result = await executeQuery(
-      `UPDATE TaskChecklistTimers
-             SET end_time = GETDATE(),
-                 duration_seconds = DATEDIFF(SECOND, start_time, GETDATE())
-             WHERE booking_id = @param1
-             AND task_id = @param2
-             AND checklist_key = @param3
-             AND end_time IS NULL`,
-      [bookingId, taskId, checklist_key]
+      `SELECT checklist_timers FROM Tasks WHERE task_id = @param1`,
+      [taskId]
     );
 
-    res.json({
-      success: true,
-      message: "Checklist timer ended"
-    });
+    if (!result.recordset || result.recordset.length === 0) {
+      return res.status(404).json({ success: false, message: "Task not found" });
+    }
+
+    let timers = {};
+    if (result.recordset[0].checklist_timers) {
+      try {
+        timers = JSON.parse(result.recordset[0].checklist_timers);
+      } catch (e) {
+        timers = {};
+      }
+    }
+
+    if (timers[checklist_key] && timers[checklist_key].start_time) {
+      const endTime = new Date();
+      const startTime = new Date(timers[checklist_key].start_time);
+      const durationSeconds = Math.floor((endTime - startTime) / 1000);
+
+      timers[checklist_key].end_time = endTime.toISOString();
+      timers[checklist_key].duration_seconds = durationSeconds;
+
+      await executeQuery(
+        `UPDATE Tasks 
+         SET checklist_timers = @param1 
+         WHERE task_id = @param2`,
+        [JSON.stringify(timers), taskId]
+      );
+
+      res.json({
+        success: true,
+        message: "Checklist timer ended"
+      });
+    } else {
+      // Timer not started or key not found
+      res.status(400).json({
+        success: false,
+        message: "Timer not started for this checklist item"
+      });
+    }
 
   } catch (err) {
     console.error("❌ endChecklistTimer error:", err);

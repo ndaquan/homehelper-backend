@@ -24,6 +24,8 @@ class BookingController {
         location,
         expected_price,
         quantity,
+        total_sessions,
+        dates,
         task
       } = req.body;
 
@@ -40,12 +42,12 @@ class BookingController {
         INSERT INTO Bookings (
           customer_id, tasker_id, service_id, variant_id,
           booking_time, start_time, end_time, location,
-          status, expected_price, quantity, type
+          status, expected_price, quantity, total_sessions, type, description
         )
         VALUES (
           @customer_id, @tasker_id, @service_id, @variant_id,
           GETDATE(), @start_time, @end_time, @location,
-          N'Chờ xử lý', @expected_price, @quantity, @type
+          N'Chờ xử lý', @expected_price, @quantity, @total_sessions, @type, @description
         );
 
         SELECT SCOPE_IDENTITY() AS booking_id;
@@ -61,6 +63,7 @@ class BookingController {
         end_time,
         location,
         expected_price,
+        description: req.body.description || null,
         quantity: safeQuantity,
         type,
       });
@@ -75,7 +78,9 @@ class BookingController {
         end_time,
         location,
         expected_price,
+        description: req.body.description || null,
         quantity: safeQuantity,
+        total_sessions: total_sessions || 1,
         type,
       });
 
@@ -95,19 +100,35 @@ class BookingController {
       console.log("✅ [Booking] booking_id =", bookingId);
 
       if (task) {
-        const taskQuery = `
-          INSERT INTO Tasks (booking_id, description, checklist, photos, completed)
-          VALUES (@booking_id, @description, @checklist, @photos, 0);
-        `;
+        // Nếu có total_sessions > 1 thì tạo nhiều Task, ngược lại tạo 1 Task
+        const sessionsCount = Number(total_sessions) || 1;
+        const sessionDates = (Array.isArray(dates) && dates.length > 0) ? dates : [start_time];
 
-        await executeQuery(taskQuery, {
-          booking_id: bookingId,
-          description: task.description || "",
-          checklist: task.checklist || "",
-          photos: JSON.stringify(task.photos || []),
-        });
+        for (let i = 0; i < sessionsCount; i++) {
+          const currentSessionDate = sessionDates[i] || null; // N.u thiếu date thì để null hoặc logic khác tuỳ business
 
-        console.log("🧾 [Task] Đã tạo Task cho booking_id:", bookingId);
+          const taskQuery = `
+            INSERT INTO Tasks (
+              booking_id, description, checklist, photos, completed, 
+              session_number, session_date, status
+            )
+            VALUES (
+              @booking_id, @description, @checklist, @photos, 0, 
+              @session_number, @session_date, N'Chờ thực hiện'
+            );
+          `;
+
+          await executeQuery(taskQuery, {
+            booking_id: bookingId,
+            description: task.description || "",
+            checklist: task.checklist || "",
+            photos: JSON.stringify(task.photos || []),
+            session_number: i + 1,
+            session_date: currentSessionDate ? new Date(currentSessionDate) : null,
+          });
+        }
+
+        console.log(`🧾 [Task] Đã tạo ${sessionsCount} Task(s) cho booking_id:`, bookingId);
       }
 
       // Push notifications depending on type
@@ -188,7 +209,11 @@ class BookingController {
           b.expected_price,
           b.paid_amount,
           b.used_voucher_id,
-          b.notes,
+
+
+          b.quantity,
+          b.total_sessions,
+          b.description,
 
           /* SERVICE */
           COALESCE(s.name, '') AS service_name,
@@ -202,6 +227,7 @@ class BookingController {
           COALESCE(v.unit, '') AS unit,
 
           /* TASK */
+          ts.task_id, /* ADDED task_id */
           COALESCE(ts.description, '') AS task_description,
           COALESCE(ts.checklist, '') AS task_checklist,
           COALESCE(ts.completed, 0) AS task_completed,
@@ -291,6 +317,10 @@ class BookingController {
           b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
           b.booking_time, b.start_time, b.end_time, b.location, b.status,
           b.type, b.base_price, b.surcharge, b.final_price, b.expected_price,
+
+          b.quantity,
+          b.total_sessions,
+          b.description,
           t.status AS tasker_status,
           t.rating AS tasker_rating,
           s.name AS service_name,
@@ -703,7 +733,12 @@ class BookingController {
           s.name AS service_name,
           sv.variant_name,
           b.expected_price,
-          b.final_price
+          b.booking_time,
+          b.final_price,
+          b.quantity,
+          b.paid_amount,
+          b.description,
+          sv.unit AS pricing_type
         FROM Bookings b
         LEFT JOIN Services s ON b.service_id = s.service_id
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
@@ -719,6 +754,7 @@ class BookingController {
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
           Paid: "Đã thanh toán",
+          "Pending Confirmation": "Chờ xác nhận",
         };
         const vn = vnMap[status] || null;
         if (vn) {
@@ -731,7 +767,7 @@ class BookingController {
         }
       }
 
-      query += " ORDER BY ISNULL(b.start_time, b.booking_time) DESC";
+      query += " ORDER BY b.booking_id DESC";
 
       const result = await executeQuery(query, params);
       return res.json({ success: true, data: result.recordset || [] });
@@ -766,6 +802,9 @@ class BookingController {
             b.status,
             b.final_price,
             b.expected_price,
+            b.quantity,
+            b.total_sessions,
+            b.description,
             sv.unit,
             sv.price_min,
             sv.price_max,
@@ -788,6 +827,8 @@ class BookingController {
       );
 
       const booking = detailsRes.recordset?.[0];
+
+      console.log("🔍 [getBookingDetails] DB Result:", booking);
 
       if (!booking) {
         return res.status(404).json({ success: false, message: "Booking không tồn tại" });
@@ -868,6 +909,10 @@ class BookingController {
           b.expected_price,
           b.base_price,
           b.final_price,
+          b.quantity,
+          b.total_sessions,
+          b.paid_amount,
+          b.description,
           u.name AS customer_name,
           u.email AS customer_email,
           u.phone AS customer_phone,
@@ -879,7 +924,11 @@ class BookingController {
         LEFT JOIN Users u ON b.customer_id = u.user_id
         LEFT JOIN Services s ON b.service_id = s.service_id
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
-        LEFT JOIN Tasks t ON b.booking_id = t.booking_id
+        OUTER APPLY (
+            SELECT TOP 1 description, checklist 
+            FROM Tasks 
+            WHERE booking_id = b.booking_id
+        ) t
         WHERE b.tasker_id = @param1
       `;
 
@@ -892,6 +941,7 @@ class BookingController {
           Completed: "Hoàn thành",
           Cancelled: "Hủy",
           Paid: "Đã thanh toán",
+          "Pending Confirmation": "Chờ xác nhận",
         };
         const vn = vnMap[status] || null;
         if (vn) {
@@ -903,7 +953,7 @@ class BookingController {
         }
       }
 
-      query += " ORDER BY ISNULL(b.start_time, b.booking_time) DESC";
+      query += " ORDER BY b.booking_id DESC";
 
       const result = await executeQuery(query, params);
       return res.json({ success: true, data: result.recordset || [] });
@@ -930,6 +980,7 @@ class BookingController {
           b.location,
           b.status,
           b.type,
+          b.total_sessions,
           s.name AS service_name,
           sv.variant_name,
           b.expected_price,
@@ -990,7 +1041,11 @@ class BookingController {
         LEFT JOIN Users u ON b.customer_id = u.user_id
         LEFT JOIN Services s ON b.service_id = s.service_id
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
-        LEFT JOIN Tasks t ON b.booking_id = t.booking_id
+        OUTER APPLY (
+            SELECT TOP 1 description, checklist 
+            FROM Tasks 
+            WHERE booking_id = b.booking_id
+        ) t
         WHERE b.type = N'SOS'
           AND b.status = N'Chờ xử lý'
           AND b.sos_expires_at > GETDATE()
@@ -1435,8 +1490,10 @@ static async getTaskerEarningsSeries(req, res) {
         return res.status(400).json({ success: false, message: "Missing notes" });
       }
 
+      // Bookings table does not have 'notes' column, so we update Tasks.
+      // Note: this updates notes for ALL tasks of the booking if invoked this way.
       await executeQuery(
-        `UPDATE Bookings SET notes = @param1 WHERE booking_id = @param2`,
+        `UPDATE Tasks SET notes = @param1 WHERE booking_id = @param2`,
         [notes, id]
       );
 
@@ -1630,13 +1687,29 @@ static async getTaskerEarningsSeries(req, res) {
       // Lấy booking + job done info
       const bookingRes = await executeQuery(
         `SELECT 
-          booking_id,
-          customer_id,
-          tasker_id,
-          notes,
-          status
-        FROM Bookings
-        WHERE booking_id = @param1`,
+          b.booking_id,
+          b.customer_id,
+          b.tasker_id,
+          b.status,
+          b.booking_time,
+          b.start_time,
+          b.end_time,
+          b.location,
+          b.type,
+          b.expected_price,
+          b.base_price,
+          b.final_price,
+          b.paid_amount,
+          b.quantity,
+          b.description,
+          b.total_sessions,
+          s.name AS service_name,
+          v.variant_name,
+          v.unit
+        FROM Bookings b
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants v ON b.variant_id = v.variant_id
+        WHERE b.booking_id = @param1`,
         [bookingId]
       );
 
@@ -1655,65 +1728,73 @@ static async getTaskerEarningsSeries(req, res) {
         [bookingId]
       );
 
-      const taskRes = await executeQuery(
-        `SELECT task_id, description, checklist, completed, photos, checklist_timers
+      // 1. Fetch sessions from Tasks table
+      const tasksQuery = `
+        SELECT 
+          task_id, booking_id, description, checklist, photos, completed, 
+          created_at, checklist_timers, session_number, session_date, 
+          checkin_time, checkout_time, status, notes
         FROM Tasks
-        WHERE booking_id = @param1`,
-        [bookingId]
-      );
+        WHERE booking_id = @param1
+        ORDER BY session_number ASC, session_date ASC
+      `;
+      const tasksResult = await executeQuery(tasksQuery, [bookingId]);
+      const sessionRows = tasksResult.recordset || [];
 
-      const tasks = taskRes.recordset.map(t => {
-        console.log("🟦 [AdminReview] RAW task row:", t);
+      // 2. Fetch photos from TaskPhotos table
+      const photosQuery = `
+        SELECT photo_id, booking_id, photo_url, photo_type, 
+               uploaded_by, uploaded_at, session_id
+        FROM TaskPhotos
+        WHERE booking_id = @param1
+      `;
+      const photosResult = await executeQuery(photosQuery, [bookingId]);
+      const allPhotos = photosResult.recordset || [];
 
-        const raw = t.checklist || "";
-
-        // giống TaskerJobDone: tách theo dòng
-        const checklist = raw
-          .split("\n")
-          .map(line => line.trim())
-          .filter(line => line.length > 0);
-
-        let photos = [];
+      // 3. Map photos to sessions
+      const tasks = sessionRows.map(session => {
+        // Parse checklist if needed
+        let checklistMapped = [];
         try {
-          photos = t.photos ? JSON.parse(t.photos) : [];
-        } catch (_) { }
-
-        console.log("🟦 [AdminReview] RAW checklist_timers:", t.checklist_timers);
-
-        let timers = {};
-        try {
-          timers = t.checklist_timers ? JSON.parse(t.checklist_timers) : {};
-        } catch (err) {
-          console.log("❌ [AdminReview] ERROR parsing checklist_timers:", err);
+          if (typeof session.checklist === 'string' && session.checklist.trim()) {
+            if (session.checklist.startsWith('[') || session.checklist.startsWith('{')) {
+              const parsed = JSON.parse(session.checklist);
+              checklistMapped = Array.isArray(parsed) ? parsed : [];
+            } else {
+              checklistMapped = session.checklist.split('\n').map(l => l.trim()).filter(Boolean);
+            }
+          } else if (Array.isArray(session.checklist)) {
+            checklistMapped = session.checklist;
+          }
+        } catch (e) {
+          console.warn("Parse checklist error in getAdminReview", e);
         }
 
-        console.log("🟩 [AdminReview] Parsed timers:", timers);
+        // Parse checklist_timers if needed
+        let timersParsed = {};
+        try {
+          if (typeof session.checklist_timers === 'string') {
+            timersParsed = JSON.parse(session.checklist_timers);
+          } else if (session.checklist_timers) {
+            timersParsed = session.checklist_timers;
+          }
+        } catch (e) { }
+
+        // Find photos for this session
+        const sessionPhotos = allPhotos.filter(p => p.session_id === session.task_id);
+        const before = sessionPhotos.filter(p => p.photo_type === 'before').map(p => p.photo_url);
+        const after = sessionPhotos.filter(p => p.photo_type === 'after').map(p => p.photo_url);
 
         return {
-          task_id: t.task_id,
-          description: t.description,
-          completed: t.completed,
-          checklist_raw: raw,   // giữ bản gốc
-          checklist,            // FE đọc theo dòng
-          photos,
-          timers
+          ...session,
+          checklist: checklistMapped,
+          timers: timersParsed,
+          photos: {
+            before,
+            after
+          }
         };
-
-        console.log("🟪 [AdminReview] Final task object:", taskObj);
-
-        return taskObj;
       });
-
-      const before_photos = photoRes.recordset
-        .filter(p => p.photo_type === "before")
-        .map(p => p.photo_url);
-
-      const after_photos = photoRes.recordset
-        .filter(p => p.photo_type === "after")
-        .map(p => p.photo_url);
-
-      booking.before_photos = before_photos;
-      booking.after_photos = after_photos;
 
       // Lấy complaint tương ứng
       const complaintRes = await executeQuery(
@@ -1733,7 +1814,7 @@ static async getTaskerEarningsSeries(req, res) {
         } catch (_) { }
       }
 
-      console.log("[AdminReview][get] DONE");
+      console.log("[AdminReview][get] DONE, total sessions:", tasks.length);
       console.log("==============================================");
 
       return res.json({
@@ -1765,7 +1846,8 @@ static async getTaskerEarningsSeries(req, res) {
         t.name AS tasker_name,
         s.name AS service_name,
         b.booking_time,
-        b.status
+        b.status,
+        b.description
       FROM Bookings b
       LEFT JOIN Users c ON b.customer_id = c.user_id
       LEFT JOIN Users t ON b.tasker_id = t.user_id
@@ -1849,7 +1931,7 @@ static async getTaskerEarningsSeries(req, res) {
           await executeQuery(
             `INSERT INTO WalletTransactions 
            (user_id, amount, type, purpose, related_id, note, created_at)
-           VALUES (@param1, @param2, N'refund', N'complaint_approved', @param3, N'Khiếu nại được duyệt', GETDATE())`,
+           VALUES (@param1, @param2, N'refund', N'complaint_approved', @param3, N'Khiếu nại được duyệt, hoàn tiền cho khách', GETDATE())`,
             [booking.customer_id, totalPrice, bookingId]
           );
         }
@@ -1899,7 +1981,7 @@ static async getTaskerEarningsSeries(req, res) {
           await executeQuery(
             `INSERT INTO WalletTransactions 
           (user_id, amount, type, purpose, related_id, note, created_at)
-          VALUES (@param1, @param2, N'payout', N'complaint_rejected', @param3, N'Khiếu nại bị từ chối', GETDATE())`,
+          VALUES (@param1, @param2, N'credit', N'complaint_rejected', @param3, N'Khiếu nại bị từ chối, tasker nhận tiền', GETDATE())`,
             [booking.tasker_id, payout, bookingId]
           );
         }
@@ -1947,9 +2029,11 @@ static async getTaskerEarningsSeries(req, res) {
 
     try {
       const bookingId = req.params.bookingId;
-      const { checklist_timers } = req.body;
+      const { checklist_timers, session_date, before_photos, after_photos, notes } = req.body;
+      // Note: before_photos and after_photos are arrays of URLs
 
       console.log("📥 Incoming bookingId:", bookingId);
+      console.log("📥 Incoming session_date:", session_date);
       console.log("📥 Incoming timers:", checklist_timers);
 
       if (!bookingId) {
@@ -1957,25 +2041,174 @@ static async getTaskerEarningsSeries(req, res) {
         return res.status(400).json({ message: "Missing bookingId" });
       }
 
-      // 1) SAVE CHECKLIST TIMERS → Bảng Tasks
-      console.log("💾 Saving checklist timers to Tasks table...");
+      // 1. Identify the Task (Session) ID based on bookingId + session_date
+      let specificTaskId = null;
+      if (session_date) {
 
-      await executeQuery(
-        `
-            UPDATE Tasks
-            SET checklist_timers = @param1
-            WHERE booking_id = @param2
-            `,
-        [JSON.stringify(checklist_timers || {}), bookingId]
+        // --- DEBUG START ---
+        try {
+          const allTasks = await executeQuery(
+            "SELECT task_id, session_date, session_number FROM Tasks WHERE booking_id = @bid",
+            { bid: bookingId }
+          );
+          console.log("🐛 [DEBUG] ALL TASKS for booking:", JSON.stringify(allTasks.recordset, null, 2));
+          console.log("🐛 [DEBUG] Looking for session_date:", session_date);
+        } catch (dbgErr) { console.warn("Debug query failed", dbgErr); }
+        // --- DEBUG END ---
+
+        const taskRes = await executeQuery(
+          "SELECT task_id FROM Tasks WHERE booking_id = @bid AND CAST(session_date AS DATE) = CAST(@sDate AS DATE)",
+          { bid: bookingId, sDate: session_date }
+        );
+        specificTaskId = taskRes.recordset?.[0]?.task_id;
+
+        if (!specificTaskId) {
+          console.warn(`⚠️ Session not found for date ${session_date} (Booking ${bookingId}). Aborting update to avoid overwriting all sessions.`);
+          return res.status(404).json({ success: false, message: `Không tìm thấy phiên làm việc ngày ${session_date}` });
+        }
+      } else {
+        // Fallback for single session or legacy: get the first task
+        const taskRes = await executeQuery(
+          "SELECT TOP 1 task_id FROM Tasks WHERE booking_id = @bid",
+          { bid: bookingId }
+        );
+        specificTaskId = taskRes.recordset?.[0]?.task_id;
+      }
+
+      console.log("🆔 Resolved Task ID:", specificTaskId);
+
+      // 2. Insert Photos into TaskPhotos table
+      // TaskPhotos: [photo_id], [booking_id], [photo_url], [photo_type], [uploaded_by], [uploaded_at], [session_id] (which is task_id here?)
+      // Assuming session_id in TaskPhotos refers to Tasks.task_id or Tasks.session_number? 
+      // Based on usual design, let's assume it links to the Task record (task_id).
+
+      const userId = req.user?.userId; // Tasker ID from auth token
+
+      const insertPhoto = async (url, type) => {
+        // Check if photo exists first to avoid duplicates
+        const checkRes = await executeQuery(
+          `SELECT photo_id FROM TaskPhotos WHERE photo_url = @url AND booking_id = @bid`,
+          { url, bid: bookingId }
+        );
+
+        if (checkRes.recordset && checkRes.recordset.length > 0) {
+          // Update existing record with session_id
+          await executeQuery(
+            `UPDATE TaskPhotos 
+           SET session_id = @tid, photo_type = @type, uploaded_at = GETUTCDATE()
+           WHERE photo_url = @url AND booking_id = @bid`,
+            {
+              tid: specificTaskId,
+              type: type,
+              url: url,
+              bid: bookingId
+            }
+          );
+        } else {
+          // Insert new record
+          await executeQuery(
+            `INSERT INTO TaskPhotos (booking_id, photo_url, photo_type, uploaded_by, uploaded_at, session_id)
+            VALUES (@bid, @url, @type, @uid, GETUTCDATE(), @tid)`,
+            {
+              bid: bookingId,
+              url: url,
+              type: type,
+              uid: userId,
+              tid: specificTaskId
+            }
+          );
+        }
+      };
+
+      if (before_photos && Array.isArray(before_photos)) {
+        for (const url of before_photos) {
+          await insertPhoto(url, 'before');
+        }
+      }
+      if (after_photos && Array.isArray(after_photos)) {
+        for (const url of after_photos) {
+          await insertPhoto(url, 'after');
+        }
+      }
+
+      console.log("� Photos inserted into TaskPhotos table.");
+      console.log(" Photos inserted into TaskPhotos table.");
+
+      // 3. Update Tasks table (Timers, Status, Checkout Time)
+      // We do NOT update 'photos' column in Tasks as per user instruction.
+
+      if (specificTaskId) {
+        await executeQuery(
+          `UPDATE Tasks
+           SET 
+             checklist_timers = @timers,
+             status = N'Hoàn thành',
+             completed = 1,
+             checkin_time = COALESCE(@checkIn, checkin_time),
+             checkout_time = COALESCE(@checkOut, GETUTCDATE())
+           WHERE task_id = @tid`,
+          {
+            timers: JSON.stringify(checklist_timers || {}),
+            tid: specificTaskId,
+            checkIn: req.body.check_in_time ? new Date(req.body.check_in_time) : null,
+            checkOut: req.body.check_out_time ? new Date(req.body.check_out_time) : null
+          }
+        );
+      } else {
+        // Fallback update all if no specific task found (shouldn't happen for multi-session)
+        await executeQuery(
+          `UPDATE Tasks
+           SET 
+             checklist_timers = @timers,
+             status = N'Hoàn thành',
+             completed = 1,
+             checkin_time = COALESCE(@checkIn, checkin_time),
+             checkout_time = COALESCE(@checkOut, GETUTCDATE())
+           WHERE booking_id = @bid`,
+          {
+            timers: JSON.stringify(checklist_timers || {}),
+            bid: bookingId,
+            checkIn: req.body.check_in_time ? new Date(req.body.check_in_time) : null,
+            checkOut: req.body.check_out_time ? new Date(req.body.check_out_time) : null
+          }
+        );
+      }
+
+      // 4. Update Notes (stored in Tasks table now, as Bookings table does not have notes column)
+      if (notes) {
+        if (specificTaskId) {
+          await executeQuery("UPDATE Tasks SET notes = @note WHERE task_id = @tid", { note: notes, tid: specificTaskId });
+        } else {
+          // Fallback: update all tasks for this booking if no specific task identified
+          await executeQuery("UPDATE Tasks SET notes = @note WHERE booking_id = @bid", { note: notes, bid: bookingId });
+        }
+      }
+
+      // 5. Check Overall Job Completion
+      const checkRes = await executeQuery(
+        `SELECT COUNT(*) as total, SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END) as done FROM Tasks WHERE booking_id = @bid`,
+        { bid: bookingId }
       );
 
-      console.log("✔ Saved timers successfully");
+      const { total, done } = checkRes.recordset[0];
+      console.log(`📊 Session Progress: ${done}/${total}`);
 
-      console.log("====== [COMPLETE JOB] SUCCESS ======");
+      let allDone = total > 0 && done >= total;
+
+      if (allDone) {
+        // Update Booking Status to "Chờ xác nhận"
+        await executeQuery(
+          "UPDATE Bookings SET status = N'Chờ xác nhận', end_time = GETUTCDATE() WHERE booking_id = @bid",
+          { bid: bookingId }
+        );
+        console.log("🎉 All sessions done! Booking status -> Chờ xác nhận");
+      }
+
       return res.status(200).json({
-        message: "Checklist timers saved",
-        booking_id: bookingId,
-        checklist_timers
+        success: true,
+        message: "Session completed & Photos saved",
+        allDone,
+        booking_id: bookingId
       });
 
     } catch (err) {
@@ -2121,6 +2354,321 @@ static async getTaskerEarningsSeries(req, res) {
   }
 
 
+  static async customerConfirmComplete(req, res) {
+    console.log("==============================================");
+    console.log("[Booking][customerConfirmComplete] START");
+
+    const bookingId = parseInt(req.params.id, 10);
+    const customerId = req.user?.userId;
+
+    console.log("[customerConfirmComplete] bookingId:", bookingId);
+    console.log("[customerConfirmComplete] customerId:", customerId);
+
+    try {
+      // Kiểm tra input
+      if (!bookingId || !customerId) {
+        return res.status(400).json({ success: false, message: "Thiếu bookingId hoặc customerId" });
+      }
+
+      // Lấy booking
+      const bookingRes = await executeQuery(
+        `SELECT booking_id, customer_id, tasker_id, expected_price, final_price 
+       FROM Bookings WHERE booking_id = @param1`,
+        [bookingId]
+      );
+      const booking = bookingRes.recordset?.[0];
+
+      if (!booking) {
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+      }
+
+      // Kiểm tra booking có phải của customer không
+      if (String(booking.customer_id) !== String(customerId)) {
+        return res.status(403).json({
+          success: false,
+          message: "Bạn không có quyền xác nhận đơn này"
+        });
+      }
+
+      // Kiểm tra đã hoàn thành chưa
+      const statusRes = await executeQuery(
+        `SELECT status FROM Bookings WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      const currentStatus = statusRes.recordset?.[0]?.status;
+
+      if (currentStatus === "Hoàn thành") {
+        return res.json({ success: true, message: "Đơn đã ở trạng thái hoàn thành" });
+      }
+
+      // -----------------------------
+      // 1️⃣ Cập nhật trạng thái booking
+      // -----------------------------
+      console.log("[customerConfirmComplete] Updating status to Hoàn thành");
+      await executeQuery(
+        `UPDATE Bookings SET status = N'Hoàn thành' WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      // -----------------------------
+      // 2️⃣ Cộng +5 uy tín cho tasker
+      // -----------------------------
+      console.log(`🎉 +5 uy tín cho tasker ${booking.tasker_id}`);
+      await updateReliabilityScore(booking.tasker_id, +5);
+
+      // -----------------------------
+      // 3️⃣ Thanh toán cho tasker (90%)
+      // -----------------------------
+      const rawAmount = booking.final_price && booking.final_price > 0
+        ? booking.final_price
+        : booking.expected_price;
+
+      const payoutAmount = Math.round(rawAmount * 0.9);
+
+      console.log(`💰 Tasker ${booking.tasker_id} nhận: ${payoutAmount}`);
+
+      await executeQuery(
+        `INSERT INTO WalletTransactions 
+        (user_id, amount, type, purpose, related_id, note, created_at)
+      VALUES 
+        (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
+        N'Thanh toán cho tasker sau khi khách xác nhận', SYSUTCDATETIME())`,
+        {
+          user_id: booking.tasker_id,
+          amount: payoutAmount,
+          booking_id: bookingId
+        }
+      );
+
+      // -----------------------------
+      // 4️⃣ +10 loyalty points cho customer
+      // -----------------------------
+      console.log(`🎁 +10 điểm thưởng cho customer ${customerId}`);
+      await executeQuery(
+        `UPDATE Users SET points = points + 10 WHERE user_id = @param1`,
+        [customerId]
+      );
+
+      // -----------------------------
+      // 5️⃣ Gửi notification
+      // -----------------------------
+      try {
+        const io = req.app.get("io");
+        console.log("[customerConfirmComplete] Sending socket event completed");
+
+        await notifyBookingEvent(io, {
+          action: "completed",
+          booking_id: bookingId,
+          customer_id: booking.customer_id,
+          tasker_id: booking.tasker_id
+        });
+      } catch (e) {
+        console.warn("[customerConfirmComplete] Socket warn:", e?.message);
+      }
+
+      console.log("[customerConfirmComplete] DONE");
+      console.log("==============================================");
+
+      return res.json({
+        success: true,
+        message: "Bạn đã xác nhận hoàn thành công việc",
+        payout: payoutAmount,
+        score: "+5 tasker",
+        customerPoints: "+10 points"
+      });
+
+    } catch (err) {
+      console.error("[customerConfirmComplete] ERROR:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Lỗi server khi xác nhận hoàn thành",
+        error: err.message
+      });
+    }
+  }
+
+  // ============================================
+  // 📝 Ký hợp đồng điện tử
+  // ============================================
+  static async signContract(req, res) {
+    try {
+      const bookingId = parseInt(req.params.id || req.params.bookingId, 10);
+      const userId = req.user.userId;
+      const { signatureUrl } = req.body;
+
+      if (!bookingId) {
+        return res.status(400).json({ success: false, message: "bookingId không hợp lệ" });
+      }
+
+      // 1. Check booking exist
+      const checkRes = await executeQuery(
+        `SELECT booking_id, customer_id, tasker_id, status, start_time, end_time 
+         FROM Bookings WHERE booking_id = @param1`,
+        [bookingId]
+      );
+      const booking = checkRes.recordset?.[0];
+
+      if (!booking) {
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+      }
+
+      console.log(`📝 [signContract] Request for BookingID: ${bookingId}, UserID: ${userId}`);
+      console.log(`   Found Booking: Status='${booking.status}', CustomerID=${booking.customer_id}`);
+
+      if (String(booking.customer_id) !== String(userId)) {
+        return res.status(403).json({ success: false, message: "Không có quyền ký hợp đồng này" });
+      }
+
+      // 2. Update status
+      // Chỉ cho phép ký khi status là "Đã chấp nhận", "Accepted" hoặc "Đã ký hợp đồng" (cho phép update lại chữ ký nếu cần)
+      if (booking.status !== "Đã chấp nhận" && booking.status !== "Accepted" && booking.status !== "Đã ký hợp đồng") {
+        console.warn(`❌ [signContract] Invalid status: ${booking.status}`);
+        return res.status(400).json({ success: false, message: `Trạng thái đơn (${booking.status}) không hợp lệ để ký hợp đồng.` });
+      }
+
+      // Update booking status
+      await executeQuery(
+        "UPDATE Bookings SET status = N'Đã ký hợp đồng' WHERE booking_id = @param1",
+        [bookingId]
+      );
+
+      // Update Contracts table if it exists
+      // We assume there's a Contracts record linked to this booking, or we find it by booking_id
+      if (signatureUrl) {
+        // Log để debug
+        console.log(`📝 [signContract] Updating signatureUrl: ${signatureUrl}`);
+
+        const updateRes = await executeQuery(
+          `UPDATE Contracts 
+             SET customer_signature_url = @url, signed_at = GETDATE(), status = N'Đã ký'
+             WHERE booking_id = @id`,
+          { url: signatureUrl, id: bookingId }
+        );
+
+        // Nếu không có dòng nào được update (chưa có hợp đồng), tạo mới
+        if (updateRes.rowsAffected[0] === 0) {
+          console.log("⚠️ No existing contract found for this booking. Creating new contract...");
+
+          const sDate = booking.start_time || new Date();
+          const eDate = booking.end_time || new Date();
+
+          await executeQuery(
+            `
+              DECLARE @NewID INT;
+              SELECT @NewID = ISNULL(MAX(contract_id), 0) + 1 FROM Contracts;
+              
+              INSERT INTO Contracts (
+                  contract_id, booking_id, customer_id, tasker_id, 
+                  terms, customer_signature_url, start_date, end_date, 
+                  status, created_at, signed_at
+              )
+              VALUES (
+                  @NewID, @bookingId, @customerId, @taskerId,
+                  N'Điều khoản dịch vụ tiêu chuẩn (Tự động tạo)', @signatureUrl, @startDate, @endDate,
+                  N'Đã ký', GETDATE(), GETDATE()
+              );
+            `,
+            {
+              bookingId,
+              customerId: booking.customer_id,
+              taskerId: booking.tasker_id, // Có thể null
+              signatureUrl,
+              startDate: sDate,
+              endDate: eDate,
+            }
+          );
+          console.log("✅ New contract created successfully.");
+        }
+      }
+
+      return res.json({ success: true, message: "Đã ký hợp đồng thành công" });
+
+    } catch (err) {
+      console.error("❌ Error signing contract:", err);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+
+  // ============================================
+  // Get sessions for a booking (Customer view)
+  // ============================================
+  static async getBookingSessions(req, res) {
+    try {
+      const { id } = req.params; // bookingId
+      if (!id) {
+        return res.status(400).json({ success: false, message: 'Missing bookingId' });
+      }
+
+      // Optional: Check if user is allowed to view this booking (Customer of the booking or Admin)
+      // For now, assuming authenticateToken is sufficient filter or frontend passes correct ID.
+
+      // 1. Fetch sessions from Tasks table
+      const tasksQuery = `
+        SELECT 
+          task_id, booking_id, description, checklist, photos, completed, 
+          created_at, checklist_timers, session_number, session_date, 
+          checkin_time, checkout_time, status, notes
+        FROM Tasks
+        WHERE booking_id = @param1
+        ORDER BY session_number ASC, session_date ASC
+      `;
+      const tasksResult = await executeQuery(tasksQuery, [id]);
+      const sessions = tasksResult.recordset || [];
+
+      // 2. Fetch photos from TaskPhotos table
+      const photosQuery = `
+        SELECT photo_id, booking_id, photo_url, photo_type, 
+               uploaded_by, uploaded_at, session_id
+        FROM TaskPhotos
+        WHERE booking_id = @param1
+      `;
+      const photosResult = await executeQuery(photosQuery, [id]);
+      const photos = photosResult.recordset || [];
+
+      // 3. Map photos to sessions
+      const sessionsWithData = sessions.map(session => {
+        // Parse checklist if needed
+        let checklistParsed = session.checklist;
+        try {
+          if (typeof session.checklist === 'string') {
+            checklistParsed = JSON.parse(session.checklist);
+          }
+        } catch (e) { }
+
+        // Parse checklist_timers if needed
+        let timersParsed = session.checklist_timers;
+        try {
+          if (typeof session.checklist_timers === 'string') {
+            timersParsed = JSON.parse(session.checklist_timers);
+          }
+        } catch (e) { }
+
+        // Find photos for this session
+        const sessionPhotos = photos.filter(p => p.session_id === session.task_id);
+        const before = sessionPhotos.filter(p => p.photo_type === 'before').map(p => p.photo_url);
+        const after = sessionPhotos.filter(p => p.photo_type === 'after').map(p => p.photo_url);
+
+        return {
+          ...session,
+          checklist: checklistParsed,
+          checklist_timers: timersParsed,
+          photos: {
+            before,
+            after
+          }
+        };
+      });
+
+      res.status(200).json({ success: true, data: sessionsWithData });
+
+    } catch (error) {
+      console.error("❌ Error fetching booking sessions:", error);
+      res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
 }
 
 module.exports = {
@@ -2151,5 +2699,7 @@ module.exports = {
   ,getTaskerUpcoming: BookingController.getTaskerUpcoming
   ,getTaskerOverdue: BookingController.getTaskerOverdue
   ,getTaskerRecentReviews: BookingController.getTaskerRecentReviews
-  ,getTaskerByService: BookingController.getTaskerByService
+  ,getTaskerByService: BookingController.getTaskerByService,
+  signContract: BookingController.signContract,
+  getBookingSessions: BookingController.getBookingSessions, // Export the new function
 };

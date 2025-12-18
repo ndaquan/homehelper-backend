@@ -117,6 +117,13 @@ router.get('/:id/badges', badgeController.getBadgesForTasker);
 // Generic tasker by id - MUST be last to avoid matching other routes
 router.get("/:id", taskerController.getById);
 
+// Lấy thông tin các session chi tiết của booking
+router.get(
+  "/bookings/:bookingId/sessions",
+  authenticateToken,
+  taskerController.getBookingSessions
+);
+
 // Bắt đầu timer checklist
 router.post(
   "/bookings/:bookingId/tasks/:taskId/timer/start",
