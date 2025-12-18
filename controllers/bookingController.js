@@ -319,9 +319,28 @@ class BookingController {
         return res.status(404).json({ success: false, message: "Không tìm thấy booking" });
       }
 
+      const booking = result.recordset[0];
+      const userId = req.user.userId;
+
+      // 🛡️ SECURITY CHECK 🛡️
+      const isOwner = booking.tasker_id === userId || booking.customer_id === userId;
+      // SOS jobs in "Chờ xử lý" with no tasker assigned are public to taskers
+      const isAvailableSOS = booking.type === 'SOS' && booking.status === 'Chờ xử lý' && booking.tasker_id === null;
+
+      if (!isOwner && !isAvailableSOS) {
+        if (booking.type === 'SOS' && booking.tasker_id && booking.tasker_id !== userId) {
+          return res.status(403).json({
+            success: false,
+            message: "Rất tiếc, đơn SOS này đã được người khác nhận.",
+            code: "SOS_TAKEN"
+          });
+        }
+        return res.status(403).json({ success: false, message: "Bạn không có quyền truy cập booking này" });
+      }
+
       res.json({
         success: true,
-        booking: result.recordset[0],
+        booking: booking,
       });
     } catch (error) {
       console.error("❌ Lỗi getBookingDetail:", error);
@@ -380,15 +399,135 @@ class BookingController {
     }
   }
 
-  static async updateStatus(req, res) {
+  static async updateStatusSOS(req, res) {
     try {
       const { id } = req.params;
       const { status } = req.body;
 
-      await executeQuery(
-        `UPDATE Bookings SET status = @status WHERE booking_id = @id`,
-        { id, status }
+      // If a tasker accepts a booking (Đã chấp nhận) and booking.tasker_id is NULL,
+      // set the tasker_id to the current authenticated user.
+      const userId = req.user?.userId;
+      if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+      console.log(`[BOOKING] updateStatusSOS called - booking_id: ${id}, status: ${status}, tasker_id: ${userId}`);
+
+      if (status === 'Hủy') {
+        // Check if it's an SOS pending job
+        const checkRes = await executeQuery(`SELECT type, status, tasker_id FROM Bookings WHERE booking_id = @id`, { id });
+        const b = checkRes.recordset[0];
+        if (b && b.type === 'SOS' && b.status === 'Chờ xử lý' && !b.tasker_id) {
+          // Tasker từ chối nhận đơn SOS -> Không làm gì cả vào DB, chỉ trả về success để FE quay về
+          return res.json({ success: true, message: "Đã từ chối đơn SOS (ẩn khỏi danh sách)" });
+        }
+      }
+
+      const query = `
+        BEGIN TRAN;
+        DECLARE @updated TABLE (booking_id INT);
+
+        IF @status = N'Đã chấp nhận'
+        BEGIN
+          UPDATE Bookings
+          SET tasker_id = CASE WHEN tasker_id IS NULL THEN @userId ELSE tasker_id END,
+              status = @status
+          OUTPUT INSERTED.booking_id INTO @updated
+          WHERE booking_id = @id 
+            AND type = N'SOS'
+            AND tasker_id IS NULL 
+            AND status = N'Chờ xử lý';
+        END
+        ELSE
+        BEGIN
+          UPDATE Bookings 
+          SET status = @status 
+          OUTPUT INSERTED.booking_id INTO @updated
+          WHERE booking_id = @id AND tasker_id = @userId;
+        END
+
+        SELECT COUNT(*) as count FROM @updated;
+        COMMIT;
+      `;
+
+      const result = await executeQuery(query, { id, status, userId });
+
+      if (result.recordset[0].count === 0) {
+        return res.status(400).json({
+          success: false,
+          message: status === 'Đã chấp nhận'
+            ? "Rất tiếc, đơn này đã được người khác nhận hoặc không còn khả dụng."
+            : "Bạn không có quyền cập nhật đơn này."
+        });
+      }
+      console.log(`[BOOKING] Status updated successfully for booking ${id}`);
+
+      // If status is "Đã chấp nhận" for an SOS booking, notify customer via socket
+      if (status === 'Đã chấp nhận') {
+        try {
+          console.log(`[BOOKING] Checking if booking ${id} is SOS type...`);
+          const bookingRes = await executeQuery(
+            `SELECT booking_id, customer_id, type, tasker_id FROM Bookings WHERE booking_id = @id`,
+            { id }
+          );
+
+          if (bookingRes.recordset && bookingRes.recordset.length > 0) {
+            const booking = bookingRes.recordset[0];
+            const isSOS = booking.type === 'SOS';
+            console.log(`[BOOKING] Booking type: ${booking.type}, isSOS: ${isSOS}`);
+
+            if (isSOS) {
+              const io = req.app.get('io');
+              if (io) {
+                console.log(`[BOOKING] Emitting sos_job_accepted to customer ${booking.customer_id}`);
+
+                // Get tasker info
+                const taskerRes = await executeQuery(
+                  `SELECT user_id, name FROM Users WHERE user_id = @userId`,
+                  { userId }
+                );
+
+                const taskerName = taskerRes.recordset?.[0]?.name || 'Tasker';
+                const acceptedPayload = {
+                  booking_id: id,
+                  taken_by_tasker_id: userId,
+                  taken_by_name: taskerName,
+                  message: 'Tasker đã nhận công việc của bạn từ API'
+                };
+
+                // Broadcast to all users as fallback (customer might be on any page)
+                io.emit('sos_job_accepted', acceptedPayload);
+                console.log(`[BOOKING] Broadcasted sos_job_accepted:`, acceptedPayload);
+              } else {
+                console.warn(`[BOOKING] ❌ io instance not found in req.app`);
+              }
+            }
+          }
+        } catch (socketErr) {
+          console.error(`[BOOKING] ❌ Error emitting socket event:`, socketErr);
+          // Don't fail the API response due to socket error
+        }
+      }
+
+      res.json({ success: true, message: `Cập nhật trạng thái: ${status}` });
+    } catch (error) {
+      console.error("❌ Lỗi updateStatusSOS:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  static async updateStatus(req, res) {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      const userId = req.user.userId;
+
+      const result = await executeQuery(
+        `UPDATE Bookings SET status = @status WHERE booking_id = @id AND tasker_id = @userId`,
+        { id, status, userId }
       );
+
+      if (result.rowsAffected[0] === 0) {
+        return res.status(403).json({ success: false, message: "Bạn không có quyền cập nhật booking này." });
+      }
 
       const bookingRes = await executeQuery(
         `SELECT tasker_id, customer_id, expected_price, final_price 
@@ -857,8 +996,9 @@ class BookingController {
           AND b.sos_expires_at > GETDATE()
           AND EXISTS (
             SELECT 1 FROM TaskerServiceVariants tsv 
+            JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
             WHERE tsv.tasker_id = @taskerId 
-            AND tsv.variant_id = b.variant_id
+            AND sv.service_id = b.service_id
           )
         ORDER BY b.sos_expires_at ASC
       `;
@@ -1431,6 +1571,140 @@ class BookingController {
       });
     }
   };
+  static async customerConfirmComplete(req, res) {
+    console.log("==============================================");
+    console.log("[Booking][customerConfirmComplete] START");
+
+    const bookingId = parseInt(req.params.id, 10);
+    const customerId = req.user?.userId;
+
+    console.log("[customerConfirmComplete] bookingId:", bookingId);
+    console.log("[customerConfirmComplete] customerId:", customerId);
+
+    try {
+      // Kiểm tra input
+      if (!bookingId || !customerId) {
+        return res.status(400).json({ success: false, message: "Thiếu bookingId hoặc customerId" });
+      }
+
+      // Lấy booking
+      const bookingRes = await executeQuery(
+        `SELECT booking_id, customer_id, tasker_id, expected_price, final_price 
+       FROM Bookings WHERE booking_id = @param1`,
+        [bookingId]
+      );
+      const booking = bookingRes.recordset?.[0];
+
+      if (!booking) {
+        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+      }
+
+      // Kiểm tra booking có phải của customer không
+      if (String(booking.customer_id) !== String(customerId)) {
+        return res.status(403).json({
+          success: false,
+          message: "Bạn không có quyền xác nhận đơn này"
+        });
+      }
+
+      // Kiểm tra đã hoàn thành chưa
+      const statusRes = await executeQuery(
+        `SELECT status FROM Bookings WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      const currentStatus = statusRes.recordset?.[0]?.status;
+
+      if (currentStatus === "Hoàn thành") {
+        return res.json({ success: true, message: "Đơn đã ở trạng thái hoàn thành" });
+      }
+
+      // -----------------------------
+      // 1️⃣ Cập nhật trạng thái booking
+      // -----------------------------
+      console.log("[customerConfirmComplete] Updating status to Hoàn thành");
+      await executeQuery(
+        `UPDATE Bookings SET status = N'Hoàn thành' WHERE booking_id = @param1`,
+        [bookingId]
+      );
+
+      // -----------------------------
+      // 2️⃣ Cộng +5 uy tín cho tasker
+      // -----------------------------
+      console.log(`🎉 +5 uy tín cho tasker ${booking.tasker_id}`);
+      await updateReliabilityScore(booking.tasker_id, +5);
+
+      // -----------------------------
+      // 3️⃣ Thanh toán cho tasker (90%)
+      // -----------------------------
+      const rawAmount = booking.final_price && booking.final_price > 0
+        ? booking.final_price
+        : booking.expected_price;
+
+      const payoutAmount = Math.round(rawAmount * 0.9);
+
+      console.log(`💰 Tasker ${booking.tasker_id} nhận: ${payoutAmount}`);
+
+      await executeQuery(
+        `INSERT INTO WalletTransactions 
+        (user_id, amount, type, purpose, related_id, note, created_at)
+      VALUES 
+        (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
+        N'Thanh toán cho tasker sau khi khách xác nhận', SYSUTCDATETIME())`,
+        {
+          user_id: booking.tasker_id,
+          amount: payoutAmount,
+          booking_id: bookingId
+        }
+      );
+
+      // -----------------------------
+      // 4️⃣ +10 loyalty points cho customer
+      // -----------------------------
+      console.log(`🎁 +10 điểm thưởng cho customer ${customerId}`);
+      await executeQuery(
+        `UPDATE Users SET points = points + 10 WHERE user_id = @param1`,
+        [customerId]
+      );
+
+      // -----------------------------
+      // 5️⃣ Gửi notification
+      // -----------------------------
+      try {
+        const io = req.app.get("io");
+        console.log("[customerConfirmComplete] Sending socket event completed");
+
+        await notifyBookingEvent(io, {
+          action: "completed",
+          booking_id: bookingId,
+          customer_id: booking.customer_id,
+          tasker_id: booking.tasker_id
+        });
+      } catch (e) {
+        console.warn("[customerConfirmComplete] Socket warn:", e?.message);
+      }
+
+      console.log("[customerConfirmComplete] DONE");
+      console.log("==============================================");
+
+      return res.json({
+        success: true,
+        message: "Bạn đã xác nhận hoàn thành công việc",
+        payout: payoutAmount,
+        score: "+5 tasker",
+        customerPoints: "+10 points"
+      });
+
+    } catch (err) {
+      console.error("[customerConfirmComplete] ERROR:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Lỗi server khi xác nhận hoàn thành",
+        error: err.message
+      });
+    }
+  }
+
 
 }
 
@@ -1452,5 +1726,7 @@ module.exports = {
   getAdminReview: BookingController.getAdminReview,
   getAdminList: BookingController.getAdminList,
   adminResolveComplaint: BookingController.adminResolveComplaint,
-  completeJob: BookingController.completeJob
+  completeJob: BookingController.completeJob,
+  customerConfirmComplete: BookingController.customerConfirmComplete,
+  updateStatusSOS: BookingController.updateStatusSOS
 };

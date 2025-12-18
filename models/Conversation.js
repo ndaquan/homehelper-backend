@@ -5,7 +5,7 @@ class Conversation {
   static async create(conversationData) {
     try {
       const { title, type, created_by, participants } = conversationData;
-      
+
       // Bắt đầu transaction
       const query = `
         SET NOCOUNT ON;
@@ -40,12 +40,12 @@ class Conversation {
           THROW;
         END CATCH;
       `;
-      
+
       const params = [title, type, created_by, ...participants];
       const result = await executeQuery(query, params);
-      
+
       const conversationId = result.recordset[0].conversation_id;
-      
+
       return await this.findById(conversationId);
     } catch (error) {
       throw new Error(`Lỗi tạo cuộc trò chuyện: ${error.message}`);
@@ -63,27 +63,27 @@ class Conversation {
         LEFT JOIN Users u ON c.created_by = u.user_id
         WHERE c.conversation_id = @param1 AND c.is_active = 1
       `;
-      
+
       const result = await executeQuery(query, [conversationId]);
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       const conversation = result.recordset[0];
-      
+
       // Lấy danh sách participants
       const participantsQuery = `
-        SELECT cp.*, u.name, u.email, u.role as user_role
+        SELECT cp.*, u.name, u.email, u.avatar_url, u.role as user_role
         FROM ConversationParticipants cp
         LEFT JOIN Users u ON cp.user_id = u.user_id
         WHERE cp.conversation_id = @param1 AND cp.is_active = 1
         ORDER BY cp.joined_at ASC
       `;
-      
+
       const participantsResult = await executeQuery(participantsQuery, [conversationId]);
       conversation.participants = participantsResult.recordset;
-      
+
       return conversation;
     } catch (error) {
       throw new Error(`Lỗi tìm cuộc trò chuyện: ${error.message}`);
@@ -94,7 +94,7 @@ class Conversation {
   static async findByUserId(userId, page = 1, limit = 20) {
     try {
       const offset = (page - 1) * limit;
-      
+
       // Query riêng biệt để tránh lỗi với multiple result sets
       const conversationsQuery = `
         SELECT c.*, 
@@ -118,18 +118,18 @@ class Conversation {
         OFFSET @param2 ROWS
         FETCH NEXT @param3 ROWS ONLY;
       `;
-      
+
       const countQuery = `
         SELECT COUNT(*) AS total
         FROM Conversations c
         INNER JOIN ConversationParticipants cp ON c.conversation_id = cp.conversation_id
         WHERE cp.user_id = @param1 AND ISNULL(cp.is_active, 1) = 1 AND ISNULL(c.is_active, 1) = 1;
       `;
-      
+
       // Thực hiện 2 query riêng biệt
       const conversationsResult = await executeQuery(conversationsQuery, [userId, offset, limit]);
       const countResult = await executeQuery(countQuery, [userId]);
-      
+
       const conversations = conversationsResult.recordset;
 
       // Gắn participants tối thiểu để FE hiển thị tên đối phương
@@ -164,7 +164,7 @@ class Conversation {
         }
       }
       const total = countResult.recordset[0].total;
-      
+
       return {
         conversations,
         total,
@@ -190,13 +190,13 @@ class Conversation {
           AND cp1.user_id = @param1 AND cp1.is_active = 1
           AND cp2.user_id = @param2 AND cp2.is_active = 1
       `;
-      
+
       const result = await executeQuery(query, [userId1, userId2]);
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi tìm cuộc trò chuyện direct: ${error.message}`);
@@ -210,9 +210,9 @@ class Conversation {
         INSERT INTO ConversationParticipants (conversation_id, user_id, role, joined_at)
         VALUES (@param1, @param2, @param3, GETDATE())
       `;
-      
+
       await executeQuery(query, [conversationId, userId, role]);
-      
+
       return true;
     } catch (error) {
       throw new Error(`Lỗi thêm participant: ${error.message}`);
@@ -227,9 +227,9 @@ class Conversation {
         SET is_active = 0, left_at = GETDATE()
         WHERE conversation_id = @param1 AND user_id = @param2
       `;
-      
+
       await executeQuery(query, [conversationId, userId]);
-      
+
       return true;
     } catch (error) {
       throw new Error(`Lỗi xóa participant: ${error.message}`);
@@ -244,9 +244,9 @@ class Conversation {
         SET last_read_at = GETDATE()
         WHERE conversation_id = @param1 AND user_id = @param2
       `;
-      
+
       await executeQuery(query, [conversationId, userId]);
-      
+
       return true;
     } catch (error) {
       throw new Error(`Lỗi cập nhật thời gian đọc: ${error.message}`);
@@ -283,7 +283,7 @@ class Conversation {
       `;
 
       await executeQuery(query, params);
-      
+
       return await this.findById(conversationId);
     } catch (error) {
       throw new Error(`Lỗi cập nhật cuộc trò chuyện: ${error.message}`);
@@ -298,7 +298,7 @@ class Conversation {
         SET is_active = 0, updated_at = GETDATE()
         WHERE conversation_id = @param1
       `;
-      
+
       await executeQuery(query, [conversationId]);
       return true;
     } catch (error) {
@@ -314,9 +314,9 @@ class Conversation {
         FROM ConversationParticipants 
         WHERE conversation_id = @param1 AND user_id = @param2 AND is_active = 1
       `;
-      
+
       const result = await executeQuery(query, [conversationId, userId]);
-      
+
       return result.recordset[0].count > 0;
     } catch (error) {
       throw new Error(`Lỗi kiểm tra participant: ${error.message}`);

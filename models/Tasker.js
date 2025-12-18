@@ -5,9 +5,9 @@ const { getPool } = require('../config/database');
 
 class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
-  static async findAll(search = "", serviceId = "") {
+  static async findAll(search = "", serviceId = "", city = "") {
     try {
-      console.log('🔍 Tasker.findAll called with:', { search, serviceId });
+      console.log('🔍 Tasker.findAll called with:', { search, serviceId, city });
 
       const params = [];
       let paramIndex = 1;
@@ -24,6 +24,17 @@ class Tasker {
         params.push(`%${search.trim()}%`);
         paramIndex++;
         console.log(`🔍 Search condition added: "${search.trim()}"`);
+      }
+
+      // City filter - search in address field
+      if (city && city.trim()) {
+        whereClause += ` AND EXISTS (
+          SELECT 1 FROM Addresses a
+          WHERE a.user_id = t.tasker_id AND UPPER(a.address) LIKE UPPER(@param${paramIndex})
+        )`;
+        params.push(`%${city.trim()}%`);
+        paramIndex++;
+        console.log(`🔍 City filter added: "${city.trim()}"`);
       }
 
       // Service filter - use EXISTS to filter taskers that have this service

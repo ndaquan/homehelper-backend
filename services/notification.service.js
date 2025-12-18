@@ -148,15 +148,15 @@ async function notifyQuoteEvent(io, { action, quote_id, post_id, customer_id, ta
   const { customer_name, tasker_name } = await fetchUserNames({ customer_id, tasker_id });
   const baseData = { quote_id, post_id, customer_id, tasker_id, customer_name, tasker_name, variant_id, proposed_price };
   switch (action) {
-      case 'sent':
-        // Tasker sent a quote -> notify customer (post owner)
-        return notify(io, {
-          user_id: customer_id,
-          type: 'message',
-          title: 'Bạn có yêu cầu làm việc mới',
-          content: `${tasker_name || 'Tasker'} đã gửi báo giá cho bài viết #${post_id} với giá ${Number(proposed_price).toLocaleString('vi-VN')}₫`,
-          data: { ...baseData, url: `${CLIENT_BASE_URL}/blog/${post_id}/quotes` }
-        });
+    case 'sent':
+      // Tasker sent a quote -> notify customer (post owner)
+      return notify(io, {
+        user_id: customer_id,
+        type: 'message',
+        title: 'Bạn có yêu cầu làm việc mới',
+        content: `${tasker_name || 'Tasker'} đã gửi báo giá cho bài viết #${post_id} với giá ${Number(proposed_price).toLocaleString('vi-VN')}₫`,
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/blog/${post_id}/quotes` }
+      });
     case 'accepted':
       // Customer accepted a quote -> notify tasker
       return notify(io, {
@@ -179,74 +179,99 @@ async function notifyQuoteEvent(io, { action, quote_id, post_id, customer_id, ta
       return;
   }
 }
-    // SOS booking notifications (notify customer + all matching taskers)
-    async function notifySosRequestToTaskers(io, { booking_id, customer_id, variant_id, service_id, location }) {
-      try {
-        // Get customer name
-        const { customer_name } = await fetchUserNames({ customer_id });
+// SOS booking notifications (notify customer + all matching taskers)
+async function notifySosRequestToTaskers(io, { booking_id, customer_id, variant_id, service_id, location }) {
+  try {
+    // Get customer name
+    const { customer_name } = await fetchUserNames({ customer_id });
 
-        // Notify the customer that SOS request has been dispatched
-        await notify(io, {
-          user_id: customer_id,
-          type: 'sos',
-          title: 'Đã gửi yêu cầu SOS',
-          content: 'Yêu cầu SOS của bạn đã được gửi đến các tasker phù hợp. Vui lòng chờ người nhận.',
-          data: {
-            booking_id,
-            customer_id,
-            customer_name,
-            variant_id,
-            service_id,
-            location
-          }
-        });
-
-        // Find taskers who can handle this variant (and optionally are active)
-        const taskersRes = await executeQuery(
-          `SELECT DISTINCT tsv.tasker_id, u.name
-           FROM TaskerServiceVariants tsv
-           JOIN Users u ON u.user_id = tsv.tasker_id
-           WHERE tsv.variant_id = @param1`,
-          [variant_id]
-        );
-
-        const rows = taskersRes.recordset || [];
-        const dataPayload = {
-          booking_id,
-          customer_id,
-          customer_name,
-          variant_id,
-          service_id,
-          location,
-          url: `${CLIENT_BASE_URL}/tasker/bookings`
-        };
-
-        // Send individual notifications (allows per-user persistence & future unread counts)
-        for (const r of rows) {
-          await notify(io, {
-            user_id: r.tasker_id,
-            type: 'sos',
-            title: 'Yêu cầu SOS mới',
-            content: `Khách hàng ${customer_name || ''} cần gấp dịch vụ. Đơn #${booking_id}.`,
-            data: dataPayload
-          });
-        }
-
-        // Emit targeted 'sos_created' only to matching taskers (avoid notifying all users)
-        try {
-          const payload = { booking_id, customer_id, customer_name, variant_id, service_id, location };
-          for (const r of rows) {
-            const room = `user_${r.tasker_id}`;
-            io && io.to && io.to(room).emit('sos_created', payload);
-          }
-        } catch {}
-
-        return { sent_to_taskers: rows.length };
-      } catch (err) {
-        console.error('[notifySosRequestToTaskers] Error:', err);
-        return { sent_to_taskers: 0, error: err.message };
+    // Notify the customer that SOS request has been dispatched
+    await notify(io, {
+      user_id: customer_id,
+      type: 'sos',
+      title: 'Đã gửi yêu cầu SOS',
+      content: 'Yêu cầu SOS của bạn đã được gửi đến các tasker phù hợp. Vui lòng chờ người nhận.',
+      data: {
+        booking_id,
+        customer_id,
+        customer_name,
+        variant_id,
+        service_id,
+        location
       }
+    });
+
+    // Find taskers who can handle this SERVICE (not just variant)
+    // Parse lat/lng from location string (format: "lat,lng")
+    let lat = 0, lng = 0;
+    if (location && location.includes(',')) {
+      [lat, lng] = location.split(',').map(n => parseFloat(n.trim()));
     }
+
+    // Find taskers who can handle this SERVICE (not just variant) within 15km
+    let taskerQuery = `
+      SELECT DISTINCT tsv.tasker_id, u.name
+      FROM TaskerServiceVariants tsv
+      JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+      JOIN Users u ON u.user_id = tsv.tasker_id
+      JOIN Addresses a ON u.user_id = a.user_id
+      WHERE sv.service_id = @param1
+        AND a.lat != 0 AND a.lng != 0
+    `;
+
+    if (lat && lng) {
+      taskerQuery += `
+        AND (6371000 * 2 * ATN2(SQRT(
+          SIN(RADIANS(a.lat - @param2)/2) * SIN(RADIANS(a.lat - @param2)/2) + 
+          COS(RADIANS(@param2)) * COS(RADIANS(a.lat)) * 
+          SIN(RADIANS(a.lng - @param3)/2) * SIN(RADIANS(a.lng - @param3)/2)
+        ), SQRT(1 - (
+          SIN(RADIANS(a.lat - @param2)/2) * SIN(RADIANS(a.lat - @param2)/2) + 
+          COS(RADIANS(@param2)) * COS(RADIANS(a.lat)) * 
+          SIN(RADIANS(a.lng - @param3)/2) * SIN(RADIANS(a.lng - @param3)/2)
+        )))) <= 15000
+      `;
+    }
+
+    const taskersRes = await executeQuery(taskerQuery, [service_id, lat, lng]);
+
+    const rows = taskersRes.recordset || [];
+    const dataPayload = {
+      booking_id,
+      customer_id,
+      customer_name,
+      variant_id,
+      service_id,
+      location,
+      url: `${CLIENT_BASE_URL}/tasker/bookings`
+    };
+
+    // Send individual notifications (allows per-user persistence & future unread counts)
+    for (const r of rows) {
+      await notify(io, {
+        user_id: r.tasker_id,
+        type: 'sos',
+        title: 'Yêu cầu SOS mới',
+        content: `Khách hàng ${customer_name || ''} cần gấp dịch vụ. Đơn #${booking_id}.`,
+        data: dataPayload
+      });
+    }
+
+    // Emit targeted 'sos_created' only to matching taskers (avoid notifying all users)
+    try {
+      const payload = { booking_id, customer_id, customer_name, variant_id, service_id, location };
+      for (const r of rows) {
+        const room = `user_${r.tasker_id}`;
+        io && io.to && io.to(room).emit('sos_created', payload);
+      }
+    } catch { }
+
+    return { sent_to_taskers: rows.length };
+  } catch (err) {
+    console.error('[notifySosRequestToTaskers] Error:', err);
+    return { sent_to_taskers: 0, error: err.message };
+  }
+}
 
 
 module.exports = {

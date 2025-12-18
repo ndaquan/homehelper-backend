@@ -4,12 +4,12 @@ require("dotenv").config();
 // Cấu hình kết nối SQL Server
 const dbConfig = {
   server: process.env.DB_SERVER || "localhost",
-  database: process.env.DB_DATABASE || "HomeHelperDB2",
+  database: process.env.DB_DATABASE || "HomeHelperDB42",
   user: process.env.DB_USER || "sa",
-  password: process.env.DB_PASSWORD || "Quan123",
+  password: process.env.DB_PASSWORD || "123456",
   port: parseInt(process.env.DB_PORT || "1433", 10),
   options: {
-    encrypt: true, // Nếu dùng Azure thì để true
+    encrypt: false, // Nếu dùng Azure thì để true
     trustServerCertificate: true, // Cho phép self-signed cert
   },
   pool: {
