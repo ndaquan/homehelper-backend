@@ -23,6 +23,14 @@ class BookingCancelController {
                 return res.status(404).json({ success: false, message: "Không tìm thấy booking" });
             }
 
+            // 🛡️ Check Ownership
+            if (req.user.role === 'Tasker' && booking.tasker_id !== req.user.userId) {
+                return res.status(403).json({ success: false, message: "Bạn không có quyền hủy booking này." });
+            }
+            if (req.user.role === 'Customer' && booking.customer_id !== req.user.userId) {
+                return res.status(403).json({ success: false, message: "Bạn không có quyền hủy booking này." });
+            }
+
             // Nếu đã hủy / hoàn thành thì không cho hủy lại
             if (booking.status === "Hủy" || booking.status === "Hoàn thành") {
                 return res.status(400).json({ success: false, message: `Booking hiện ở trạng thái '${booking.status}', không thể hủy.` });
@@ -83,14 +91,15 @@ class BookingCancelController {
             }
 
             if (cancelledBy === "tasker" || cancelledBy === "tasker_late") {
-                // --- 1) Nếu khách chưa thanh toán: KHÔNG phạt ---
-                if (!alreadyPaid) {
+                // --- 1) Nếu khách chưa thanh toán: KHÔNG phạt (trừ khi là SOS) ---
+                if (!alreadyPaid && booking.type !== 'SOS') {
                     console.log("Tasker hủy nhưng khách chưa thanh toán → Không phạt.");
                     return;
                 }
 
                 // ⭐ Trừ điểm uy tín
-                let penalty = cancelledBy === "tasker" ? -10 : -20;
+                // Nếu là SOS thì luôn trừ 30 điểm
+                let penalty = (booking.type === 'SOS') ? -30 : (cancelledBy === "tasker" ? -10 : -20);
                 await updateReliabilityScore(booking.tasker_id, penalty);
 
                 // ⭐ Refund FULL cho khách
@@ -129,7 +138,7 @@ class BookingCancelController {
                 }
             }
 
-            
+
             // 6️⃣ Emit booking cancellation notification
             try {
                 const io = req.app.get('io');

@@ -105,7 +105,6 @@ app.use("/api/negotiations", require("./routes/negotiations"));
 app.use("/api/badges", require("./routes/badges"));
 app.use("/api/evidence", require("./routes/evidence"))
 // app.use('/api/users', require('./routes/users'));
-app.use('/api/bookings', require('./routes/bookings'));
 app.use("/api/vouchers", require("./routes/vouchers"));
 // app.use('/api/posts', require('./routes/posts'));
 app.use('/api/system-reports', require('./routes/systemReports'));

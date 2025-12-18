@@ -120,5 +120,6 @@ router.patch("/:id/admin-resolve", authenticateToken, requireAdmin, bookingContr
 router.patch(
   "/:bookingId/complete", authenticateToken, bookingController.completeJob
 );
+router.patch("/:id/confirm", authenticateToken, bookingController.customerConfirmComplete);
 
 module.exports = router;
