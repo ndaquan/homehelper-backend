@@ -9,7 +9,7 @@ const dbConfig = {
   password: process.env.DB_PASSWORD || "123456",
   port: parseInt(process.env.DB_PORT || "1433", 10),
   options: {
-    encrypt: false, // Nếu dùng Azure thì để true
+    encrypt: true,  // Nếu dùng Azure thì để tru
     trustServerCertificate: true, // Cho phép self-signed cert
   },
   pool: {
