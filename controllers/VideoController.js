@@ -190,6 +190,20 @@ class VideoController {
     }
   }
 
+  static async getPopularVideos(req, res) {
+    try {
+      const { limit = 4 } = req.query;
+      const videos = await Video.getPopularVideos(parseInt(limit, 10) || 4);
+      res.status(200).json({
+        message: 'Lấy video phổ biến thành công',
+        videos,
+      });
+    } catch (error) {
+      console.error('❌ Lỗi khi lấy video phổ biến:', error);
+      res.status(500).json({ error: 'Lỗi server khi lấy video phổ biến' });
+    }
+  }
+
   static async getVideoById(req, res) {
     try {
       const { videoId } = req.params;

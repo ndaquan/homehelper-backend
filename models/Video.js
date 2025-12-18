@@ -1,5 +1,5 @@
 const { executeQuery, sql, getPool } = require('../config/database');
-
+const ImageEncryption = require('../utils/imageEncryption');
 class Video {
     static async logModeration(videoId, moderation) {
         const raw = moderation.raw;
@@ -96,19 +96,47 @@ class Video {
 
     static async getAllVideos() {
         const query = `
-      SELECT v.video_id, v.user_id, v.title, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status, 
+        SELECT v.video_id, v.user_id, v.title, v.video_url, v.public_id, 
+                v.likes, v.uploaded_at, v.status, 
+                u.name AS expert, u.avatar_url, t.rating
+        FROM Videos v
+        JOIN Users u ON v.user_id = u.user_id
+        LEFT JOIN Taskers t ON v.user_id = t.tasker_id
+        WHERE v.is_deleted = 0 AND v.status = 'Approved'
+        ORDER BY v.uploaded_at DESC
+        `;
+
+        try {
+            const result = await executeQuery(query);
+            const data = result.recordset.map(item => ({
+                ...item,
+                avatar_url: ImageEncryption.decrypt(item.avatar_url)
+            }));
+
+            return data;
+        } catch (error) {
+            throw new Error(`Lỗi khi lấy tất cả video: ${error.message}`);
+        }
+    }
+
+    static async getPopularVideos(limit = 4) {
+        // Ensure integers
+        limit = parseInt(limit, 10) || 4;
+        const query = `
+      SELECT v.video_id, v.user_id, v.title, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status,
              u.name AS expert, u.avatar_url, t.rating
       FROM Videos v
       JOIN Users u ON v.user_id = u.user_id
       LEFT JOIN Taskers t ON v.user_id = t.tasker_id
       WHERE v.is_deleted = 0 AND v.status = 'Approved'
-      ORDER BY v.uploaded_at DESC
+      ORDER BY v.likes DESC, v.uploaded_at DESC
+      OFFSET 0 ROWS FETCH NEXT @param1 ROWS ONLY
     `;
         try {
-            const result = await executeQuery(query);
+            const result = await executeQuery(query, [limit]);
             return result.recordset;
         } catch (error) {
-            throw new Error(`Lỗi khi lấy tất cả video: ${error.message}`);
+            throw new Error(`Lỗi khi lấy video phổ biến: ${error.message}`);
         }
     }
 
@@ -152,17 +180,26 @@ class Video {
 
     static async getVideoById(videoId) {
         const query = `
-      SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, v.uploaded_at, v.status,
-                  v.text_moderation_status, v.text_moderation_reason,
-                  u.name AS expert, u.avatar_url, t.rating
-      FROM Videos v
-      JOIN Users u ON v.user_id = u.user_id
-      LEFT JOIN Taskers t ON v.user_id = t.tasker_id
-      WHERE v.video_id = @param1 AND v.is_deleted = 0
-    `;
+        SELECT v.video_id, v.user_id, v.title, v.description, v.video_url, v.public_id, v.likes, 
+                v.uploaded_at, v.status,
+                v.text_moderation_status, v.text_moderation_reason,
+                u.name AS expert, u.avatar_url, t.rating
+        FROM Videos v
+        JOIN Users u ON v.user_id = u.user_id
+        LEFT JOIN Taskers t ON v.user_id = t.tasker_id
+        WHERE v.video_id = @param1 AND v.is_deleted = 0
+        `;
+
         try {
             const result = await executeQuery(query, [videoId]);
-            return result.recordset[0] || null;
+            const video = result.recordset[0] || null;
+
+            if (video) {
+                // 🔓 Decrypt avatar_url
+                video.avatar_url = ImageEncryption.decrypt(video.avatar_url);
+            }
+
+            return video;
         } catch (error) {
             throw new Error(`Lỗi khi lấy video theo ID: ${error.message}`);
         }

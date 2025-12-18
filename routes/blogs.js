@@ -18,6 +18,7 @@ router.get("/stats", blogController.getStats);
 router.get("/:id", blogController.getPostById);
 router.get("/:id/comments", blogController.getPostComments);
 router.get("/:id/services", blogController.getPostServices);
+router.get("/:id/related", blogController.getRelatedPosts);
 router.get("/:id/likes", blogController.checkLikeStatus);
 router.post("/:id/like", blogController.toggleLikePost);
 
