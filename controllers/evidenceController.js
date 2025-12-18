@@ -111,13 +111,10 @@ exports.approveEvidence = async (req, res) => {
     );
     const booking = b.recordset[0];
 
-    // --- RULE R6: Tasker nhận 100% (no_show)
+    // --- RULE R6: Tasker nhận 100% số tiền khách đã trả (Không trừ phí hệ thống)
     const policy = calculateRefundPolicy(booking, "no_show");
-    // ✅ Tiền gốc không dính voucher
-    const gross = booking.base_price > 0 ? booking.base_price : booking.expected_price;
-
-    // ✅ Tasker nhận 90% (platform giữ 10%)
-    const compensationAmount = Math.round(Number(gross) * 0.9);
+    const actualPaid = Number(booking.paid_amount || 0);
+    const compensationAmount = actualPaid;
 
     /// Update Evidence
     await executeQuery(`
@@ -192,12 +189,10 @@ exports.rejectEvidence = async (req, res) => {
     }
 
 
-    // --- RULE R8: refund 100% for customer
+    // --- RULE R8: Hoàn 100% số tiền khách đã trả (Sử dụng paid_amount)
     const policy = calculateRefundPolicy(booking, "evidence_rejected");
-    const total = booking.final_price > 0
-      ? booking.final_price
-      : booking.expected_price;
-    const refundAmount = Math.round(total * (policy.refundPercent / 100));
+    const actualPaid = Number(booking.paid_amount || 0);
+    const refundAmount = actualPaid;
 
     // Update evidence
     await executeQuery(`
