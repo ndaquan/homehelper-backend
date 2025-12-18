@@ -81,16 +81,38 @@ router.post(
     try {
       const { type, bookingId } = req.params;
       const uploadedBy =
-        req.user?.userId || req.user?.user_id || null; // Tasker ID từ token
+        req.user?.userId || req.user?.user_id || "anonymous";
 
       if (!req.files || req.files.length === 0) {
         return res.status(400).json({ success: false, message: "No files uploaded" });
       }
 
+      console.log(`📸 Uploading ${req.files.length} photos for booking ${bookingId} (Type: ${type})`);
+
       const inserted = [];
 
       for (const file of req.files) {
-        const photoUrl = file.path || `/uploads/task-photos/${file.filename}`;
+        let photoUrl = file.path;
+
+        // Fallback: If no path (MemoryStorage), upload manually
+        if (!photoUrl && file.buffer) {
+          console.log(`⚠️ No file path found, using manual buffer upload for ${file.originalname}`);
+          // Use the helper from config/cloudinary with correct options
+          // We need to require it if not already imported, but better to rely on imports.
+          // Assuming uploadBufferToCloudinary is available in scope or imported.
+          // Importing it inside this block is safer if not available globally in this file yet.
+          const { uploadBufferToCloudinary } = require("../config/cloudinary");
+
+          const folderBase = process.env.CLOUDINARY_FOLDER_BASE || "homehelper";
+          const result = await uploadBufferToCloudinary(file.buffer, {
+            folder: `${folderBase}/task-photos/${uploadedBy}`,
+            resource_type: "image",
+          });
+          photoUrl = result.secure_url || result.url;
+        } else if (!photoUrl) {
+          // Should not happen if memory or storage is working
+          photoUrl = `/uploads/task-photos/${file.filename || Date.now()}`;
+        }
 
         const query = `
           INSERT INTO TaskPhotos (booking_id, photo_url, photo_type, uploaded_by)
@@ -99,15 +121,19 @@ router.post(
         `;
 
         const params = [
-          bookingId,       
+          bookingId,
           photoUrl,
           type,
           uploadedBy
         ];
 
         const result = await executeQuery(query, params);
-        inserted.push(result.recordset[0]);
+        if (result.recordset && result.recordset[0]) {
+          inserted.push(result.recordset[0]);
+        }
       }
+
+      console.log("✅ Photos uploaded successfully:", inserted.length);
 
       return res.json({
         success: true,
@@ -115,7 +141,7 @@ router.post(
         data: inserted,
       });
     } catch (err) {
-      console.error("Upload error:", err);
+      console.error("❌ Task photos upload error:", err);
       return res.status(500).json({ success: false, message: "Upload failed", error: err.message });
     }
   }
@@ -183,6 +209,52 @@ router.post(
       res.status(500).json({
         success: false,
         message: "Upload avatar thất bại",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// POST /api/uploads/signature - Upload chữ ký
+router.post(
+  "/signature",
+  authenticateToken,
+  memoryUpload.single("signature"),
+  async (req, res) => {
+    try {
+      if (!req.file) {
+        return res
+          .status(400)
+          .json({ success: false, message: "No signature file uploaded" });
+      }
+
+      const userId =
+        (req.user && (req.user.userId || req.user.user_id)) || "anonymous";
+      const folderBase = process.env.CLOUDINARY_FOLDER_BASE || "homehelper";
+      const folder = `${folderBase}/signatures/${userId}`;
+
+      const result = await new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          {
+            folder,
+            resource_type: "image",
+          },
+          (error, result) => {
+            if (error) return reject(error);
+            resolve(result);
+          }
+        );
+        stream.end(req.file.buffer);
+      });
+
+      const signatureUrl = result.secure_url || result.url;
+
+      res.json({ success: true, data: { url: signatureUrl } });
+    } catch (error) {
+      console.error("Signature upload error:", error);
+      res.status(500).json({
+        success: false,
+        message: "Upload failed",
         error: error.message,
       });
     }

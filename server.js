@@ -85,7 +85,7 @@ app.use("/api/ratings", require("./routes/ratings"));
 app.use("/api/wishlists", require("./routes/wishlist"));
 
 // app.use('/api/feedbacks', require('./routes/feedbacks'));
-// app.use('/api/complaints', require('./routes/complaints'));
+app.use('/api/complaints', require('./routes/complaints'));
 // app.use('/api/notifications', require('./routes/notifications'));
 app.use("/api/momo", require("./routes/momo"));
 app.use("/api/wallet", require("./routes/wallet"));

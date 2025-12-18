@@ -70,7 +70,16 @@ router.get(
   bookingController.canRateTasker
 );
 
+
 router.get("/details/:id", authenticateToken, bookingController.getBookingDetails);
+
+// NEW: Endpoint to get session details (similar to tasker's view but for customer)
+router.get(
+  "/:id/sessions",
+  authenticateToken,
+  bookingController.getBookingSessions
+);
+
 
 // // GET /api/bookings/:bookingId - chi tiết booking
 
@@ -149,5 +158,9 @@ router.patch(
   "/:bookingId/complete", authenticateToken, bookingController.completeJob
 );
 router.patch("/:id/confirm", authenticateToken, bookingController.customerConfirmComplete);
+
+router.patch("/:id/confirm", authenticateToken, bookingController.customerConfirmComplete);
+
+router.post("/:id/sign", authenticateToken, bookingController.signContract);
 
 module.exports = router;

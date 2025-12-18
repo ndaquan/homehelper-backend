@@ -18,4 +18,9 @@ router.delete('/users/:id', ctrl.deleteUser);
 // Taskers summary
 router.get('/taskers/summary', taskersCtrl.summary);
 
+// Dashboard stats
+const AdminStatsController = require('../controllers/adminStatsController');
+router.get('/stats', AdminStatsController.getDashboardStats);
+router.get('/financial-details', AdminStatsController.getFinancialDetails);
+
 module.exports = router;
