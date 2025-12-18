@@ -5,19 +5,19 @@ class Notification {
   static async create(notificationData) {
     try {
       const { user_id, title, content, type, data, expires_at } = notificationData;
-      
+
       const query = `
         INSERT INTO Notifications (user_id, title, content, type, data, expires_at, created_at)
-        VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE());
+        VALUES (@param1, @param2, @param3, @param4, @param5, @param6, SYSUTCDATETIME());
         
         SELECT SCOPE_IDENTITY() AS notification_id;
       `;
-      
+
       const params = [user_id, title, content, type, data, expires_at];
       const result = await executeQuery(query, params);
-      
+
       const notificationId = result.recordset[0].notification_id;
-      
+
       return await this.findById(notificationId);
     } catch (error) {
       throw new Error(`Lỗi tạo thông báo: ${error.message}`);
@@ -28,19 +28,19 @@ class Notification {
   static async createForMultipleUsers(userIds, notificationData) {
     try {
       const { title, content, type, data, expires_at } = notificationData;
-      
+
       const query = `
         INSERT INTO Notifications (user_id, title, content, type, data, expires_at, created_at)
         VALUES ${userIds.map((_, index) => `(@param${index * 6 + 1}, @param${index * 6 + 2}, @param${index * 6 + 3}, @param${index * 6 + 4}, @param${index * 6 + 5}, @param${index * 6 + 6}, GETDATE())`).join(', ')};
       `;
-      
+
       const params = [];
       userIds.forEach(userId => {
         params.push(userId, title, content, type, data, expires_at);
       });
-      
+
       await executeQuery(query, params);
-      
+
       return true;
     } catch (error) {
       throw new Error(`Lỗi tạo thông báo cho nhiều user: ${error.message}`);
@@ -56,13 +56,13 @@ class Notification {
         LEFT JOIN Users u ON n.user_id = u.user_id
         WHERE n.notification_id = @param1
       `;
-      
+
       const result = await executeQuery(query, [notificationId]);
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi tìm thông báo: ${error.message}`);
@@ -105,7 +105,7 @@ class Notification {
       whereClause += ` AND (n.expires_at IS NULL OR n.expires_at > GETDATE())`;
 
       const offset = (page - 1) * limit;
-      
+
       const query = `
         SELECT n.*
         FROM Notifications n
@@ -118,17 +118,17 @@ class Notification {
         FROM Notifications n
         ${whereClause};
       `;
-      
+
       params.push(offset, limit);
       const result = await executeQuery(query, params);
-      
+
       const notifications = (result.recordset && result.recordset.length > 0)
         ? result.recordset.slice(0, -1)
         : [];
       const total = (result.recordset && result.recordset.length > 0)
         ? result.recordset[result.recordset.length - 1].total
         : 0;
-      
+
       return {
         notifications,
         total,
@@ -151,9 +151,9 @@ class Notification {
           AND is_read = 0
           AND (expires_at IS NULL OR expires_at > GETDATE())
       `;
-      
+
       const result = await executeQuery(query, [userId]);
-      
+
       return result.recordset[0].unread_count;
     } catch (error) {
       throw new Error(`Lỗi đếm thông báo chưa đọc: ${error.message}`);
@@ -171,9 +171,9 @@ class Notification {
           AND (n.expires_at IS NULL OR n.expires_at > GETDATE())
         ORDER BY n.created_at DESC
       `;
-      
+
       const result = await executeQuery(query, [userId]);
-      
+
       return result.recordset;
     } catch (error) {
       throw new Error(`Lỗi lấy thông báo chưa đọc: ${error.message}`);
@@ -188,9 +188,9 @@ class Notification {
         SET is_read = 1, read_at = GETDATE()
         WHERE notification_id = @param1
       `;
-      
+
       await executeQuery(query, [notificationId]);
-      
+
       return await this.findById(notificationId);
     } catch (error) {
       throw new Error(`Lỗi đánh dấu thông báo đã đọc: ${error.message}`);
@@ -205,9 +205,9 @@ class Notification {
         SET is_read = 1, read_at = GETDATE()
         WHERE user_id = @param1 AND is_read = 0
       `;
-      
+
       await executeQuery(query, [userId]);
-      
+
       return true;
     } catch (error) {
       throw new Error(`Lỗi đánh dấu tất cả thông báo đã đọc: ${error.message}`);
@@ -221,7 +221,7 @@ class Notification {
         DELETE FROM Notifications 
         WHERE notification_id = @param1
       `;
-      
+
       await executeQuery(query, [notificationId]);
       return true;
     } catch (error) {
@@ -236,7 +236,7 @@ class Notification {
         DELETE FROM Notifications 
         WHERE user_id = @param1 AND is_read = 1
       `;
-      
+
       await executeQuery(query, [userId]);
       return true;
     } catch (error) {
@@ -251,9 +251,9 @@ class Notification {
         DELETE FROM Notifications 
         WHERE expires_at IS NOT NULL AND expires_at < GETDATE()
       `;
-      
+
       const result = await executeQuery(query);
-      
+
       return result.rowsAffected[0];
     } catch (error) {
       throw new Error(`Lỗi xóa thông báo hết hạn: ${error.message}`);
@@ -268,13 +268,13 @@ class Notification {
         FROM Users u, Conversations c
         WHERE u.user_id = @param1 AND c.conversation_id = @param2
       `;
-      
+
       const result = await executeQuery(query, [senderId, conversationId]);
-      
+
       if (result.recordset.length === 0) {
         throw new Error('Không tìm thấy thông tin sender hoặc conversation');
       }
-      
+
       const { sender_name, conversation_title } = result.recordset[0];
       const title = `Tin nhắn mới từ ${sender_name}`;
       const content = messageContent.length > 100 ? messageContent.substring(0, 100) + '...' : messageContent;
@@ -283,7 +283,7 @@ class Notification {
         sender_id: senderId,
         type: 'message'
       });
-      
+
       return await this.create({
         user_id: recipientId,
         title,
@@ -326,9 +326,9 @@ class Notification {
         WHERE user_id = @param1 
           AND (expires_at IS NULL OR expires_at > GETDATE())
       `;
-      
+
       const result = await executeQuery(query, [userId]);
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi lấy thống kê thông báo: ${error.message}`);
