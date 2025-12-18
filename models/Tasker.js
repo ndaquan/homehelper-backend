@@ -1,7 +1,21 @@
 const { executeQuery } = require("../config/database");
 const { getReliabilityColor, getReliabilityLabel } = require("../utils/reliability");
+const ImageEncryption = require("../utils/imageEncryption");
 const sql = require('mssql');
 const { getPool } = require('../config/database');
+
+// Safe decrypt helper to avoid crashes if module/format differs
+const safeDecrypt = (value) => {
+  try {
+    if (!value) return value;
+    if (ImageEncryption && typeof ImageEncryption.decrypt === 'function') {
+      return ImageEncryption.decrypt(value);
+    }
+    return value;
+  } catch (_) {
+    return value;
+  }
+};
 
 class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
@@ -52,6 +66,7 @@ class Tasker {
       let query = `
       SELECT 
         t.tasker_id,
+        u.avatar_url AS avatar,
         u.name AS tasker_name,
         t.Introduce AS Introduce,
         t.certifications,
@@ -102,6 +117,7 @@ class Tasker {
           const score = row.reliability_score || 0;
           taskersMap[row.tasker_id] = {
             tasker_id: row.tasker_id,
+            avatar: safeDecrypt(row.avatar),
             name: row.tasker_name,
             Introduce: row.Introduce,
             certifications: row.certifications,
@@ -196,6 +212,7 @@ class Tasker {
       const query = `
         SELECT 
           t.tasker_id,
+          u.avatar_url AS avatar,
           u.name AS tasker_name,
           u.email AS email,
           t.Introduce AS Introduce,
@@ -233,6 +250,7 @@ class Tasker {
           const score = row.reliability_score || 0;
           taskersMap[row.tasker_id] = {
             tasker_id: row.tasker_id,
+            avatar: safeDecrypt(row.avatar),
             name: row.tasker_name,
             Introduce: row.Introduce,
             certifications: row.certifications,
@@ -286,7 +304,11 @@ class Tasker {
       `;
       const result = await executeQuery(query, [id]);
       if (!result.recordset.length) return null;
-      return result.recordset[0];
+      const row = result.recordset[0];
+      return {
+        ...row,
+        avatar: safeDecrypt(row.avatar_url),
+      };
     } catch (error) {
       throw new Error(`Lỗi lấy tasker theo ID: ${error.message}`);
     }

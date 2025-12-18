@@ -1011,6 +1011,421 @@ class BookingController {
     }
   }
 
+  // ============================================
+  // 7️⃣ Tasker overview stats (bookings + earnings)
+  // ============================================
+  static async getTaskerStats(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) {
+        return res.status(401).json({ success: false, message: "Unauthorized" });
+      }
+
+      // Booking counts by status for this tasker
+      const statusRes = await executeQuery(
+        `SELECT status, COUNT(*) AS count
+         FROM Bookings
+         WHERE tasker_id = @taskerId
+         GROUP BY status`,
+        { taskerId }
+      );
+
+      const statusCountsRaw = statusRes.recordset || [];
+      const statusMap = {
+        pending: ['Pending', 'Chờ xử lý'],
+        accepted: ['Accepted', 'Đã chấp nhận'],
+        in_progress: ['In Progress', 'Đang tiến hành'],
+        completed: ['Completed', 'Hoàn thành'],
+        cancelled: ['Cancelled', 'Hủy'],
+        complaint_processing: ['Xử lí khiếu nại của khách'],
+      };
+
+      const by_status = Object.fromEntries(
+        Object.keys(statusMap).map(k => [k, 0])
+      );
+
+      for (const row of statusCountsRaw) {
+        const s = (row.status || '').trim();
+        for (const [key, values] of Object.entries(statusMap)) {
+          if (values.includes(s)) {
+            by_status[key] += row.count;
+            break;
+          }
+        }
+      }
+
+      const totalsRes = await executeQuery(
+        `SELECT COUNT(*) AS total
+         FROM Bookings
+         WHERE tasker_id = @taskerId`,
+        { taskerId }
+      );
+      const total_bookings = totalsRes.recordset?.[0]?.total || 0;
+
+      // Completed this month (based on end_time or booking_time if end_time null)
+      const completedMonthRes = await executeQuery(
+        `SELECT COUNT(*) AS count
+         FROM Bookings
+         WHERE tasker_id = @taskerId
+           AND (status = N'Hoàn thành' OR status = 'Completed')
+           AND YEAR(ISNULL(end_time, booking_time)) = YEAR(GETDATE())
+           AND MONTH(ISNULL(end_time, booking_time)) = MONTH(GETDATE())`,
+        { taskerId }
+      );
+      const completed_this_month = completedMonthRes.recordset?.[0]?.count || 0;
+
+      // Earnings: sum WalletTransactions where user_id = tasker and type in ('credit','payout')
+    const earningsTotalRes = await executeQuery(
+      `
+      SELECT
+        ISNULL(SUM(b.expected_price * 0.9), 0) AS total
+      FROM Bookings b
+      WHERE b.tasker_id = @taskerId
+        AND b.status IN (N'Hoàn thành','Completed')
+      `,
+      { taskerId }
+    );
+
+    const earnings_total = earningsTotalRes.recordset?.[0]?.total || 0;
+
+    const earningsMonthRes = await executeQuery(
+      `
+      SELECT
+        ISNULL(SUM(expected_price * 0.9), 0) AS total
+      FROM Bookings
+      WHERE tasker_id = @taskerId
+        AND status IN (N'Hoàn thành','Completed')
+        AND YEAR(end_time) = YEAR(GETDATE())
+        AND MONTH(end_time) = MONTH(GETDATE())
+      `,
+      { taskerId }
+    );
+
+    const earnings_this_month = earningsMonthRes.recordset?.[0]?.total || 0;
+
+      // Average rating for tasker (if Ratings table exists)
+      let rating_avg = null;
+      try {
+        const ratingRes = await executeQuery(
+          `SELECT AVG(CAST(rating AS FLOAT)) AS avg_rating
+           FROM Ratings
+           WHERE reviewee_id = @taskerId`,
+          { taskerId }
+        );
+        rating_avg = ratingRes.recordset?.[0]?.avg_rating ?? null;
+      } catch (_) { /* ratings table may not exist */ }
+
+      // Recent bookings for quick glance
+      const recentRes = await executeQuery(
+        `SELECT TOP 5 booking_id, status, service_id, variant_id,
+                ISNULL(start_time, booking_time) AS time,
+                expected_price, final_price
+         FROM Bookings
+         WHERE tasker_id = @taskerId
+         ORDER BY ISNULL(start_time, booking_time) DESC`,
+        { taskerId }
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          total_bookings,
+          by_status,
+          completed_this_month,
+          earnings_total,
+          earnings_this_month,
+          rating_avg,
+          recent_bookings: recentRes.recordset || []
+        }
+      });
+    } catch (error) {
+      console.error("❌ Error getTaskerStats:", error);
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+static async getTaskerEarningsSeries(req, res) {
+  try {
+    const taskerId = req.user?.userId;
+    if (!taskerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const granularity = (req.query.granularity || 'month').toLowerCase();
+    const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
+
+    // Time column to use
+    const timeCol = 'ISNULL(end_time, start_time)';
+
+    let dateFilter = `${timeCol} >= DATEADD(month, -@periods, GETDATE())`;
+    if (granularity === 'week') {
+      dateFilter = `${timeCol} >= DATEADD(week, -@periods, GETDATE())`;
+    }
+    if (granularity === 'quarter') {
+      dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, GETDATE())`;
+    }
+
+    let sql = '';
+
+    if (granularity === 'week') {
+      sql = `
+        WITH G AS (
+          SELECT
+            YEAR(${timeCol}) AS y,
+            DATEPART(ISO_WEEK, ${timeCol}) AS x,
+            SUM(expected_price * 0.9) AS total
+          FROM Bookings
+          WHERE tasker_id = @taskerId
+            AND status IN (N'Hoàn thành','Completed')
+            AND ${dateFilter}
+          GROUP BY
+            YEAR(${timeCol}),
+            DATEPART(ISO_WEEK, ${timeCol})
+        )
+        SELECT
+          CONCAT(y, '-W', RIGHT('0'+CAST(x AS varchar(2)),2)) AS label,
+          total
+        FROM G
+        ORDER BY y ASC, x ASC
+      `;
+    } else if (granularity === 'quarter') {
+      sql = `
+        WITH G AS (
+          SELECT
+            YEAR(${timeCol}) AS y,
+            DATEPART(QUARTER, ${timeCol}) AS x,
+            SUM(expected_price * 0.9) AS total
+          FROM Bookings
+          WHERE tasker_id = @taskerId
+            AND status IN (N'Hoàn thành','Completed')
+            AND ${dateFilter}
+          GROUP BY
+            YEAR(${timeCol}),
+            DATEPART(QUARTER, ${timeCol})
+        )
+        SELECT
+          CONCAT(y, '-Q', x) AS label,
+          total
+        FROM G
+        ORDER BY y ASC, x ASC
+      `;
+    } else {
+      // month (default)
+      sql = `
+        WITH G AS (
+          SELECT
+            YEAR(${timeCol}) AS y,
+            MONTH(${timeCol}) AS x,
+            SUM(expected_price * 0.9) AS total
+          FROM Bookings
+          WHERE tasker_id = @taskerId
+            AND status IN (N'Hoàn thành','Completed')
+            AND ${dateFilter}
+          GROUP BY
+            YEAR(${timeCol}),
+            MONTH(${timeCol})
+        )
+        SELECT
+          CONCAT(y, '-', RIGHT('0'+CAST(x AS varchar(2)),2)) AS label,
+          total
+        FROM G
+        ORDER BY y ASC, x ASC
+      `;
+    }
+
+    const result = await executeQuery(sql, { taskerId, periods });
+    return res.json({ success: true, data: result.recordset || [] });
+  } catch (err) {
+    console.error('❌ getTaskerEarningsSeries:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+}
+
+  // Bookings by month: completed vs pending-like
+  static async getTaskerBookingsMonthly(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const months = Math.max(1, Math.min(24, parseInt(req.query.months || '6', 10)));
+
+      const sql = `
+        WITH filtered AS (
+          SELECT YEAR(ISNULL(start_time, booking_time)) AS y,
+                 MONTH(ISNULL(start_time, booking_time)) AS m,
+                 status
+          FROM Bookings
+          WHERE tasker_id = @taskerId
+            AND ISNULL(start_time, booking_time) >= DATEADD(month, -@months, GETDATE())
+        )
+        SELECT CONCAT(y,'-',RIGHT('0'+CAST(m as varchar(2)),2)) AS label,
+               SUM(CASE WHEN status IN (N'Hoàn thành','Completed') THEN 1 ELSE 0 END) AS completed,
+               SUM(
+                  CASE WHEN status IN (
+                    N'Chờ xử lý','Pending',
+                    N'Đã chấp nhận','Accepted',
+                    N'Đang tiến hành','In Progress',
+                    N'Hủy','Cancelled','Canceled'
+                  )
+        THEN 1 ELSE 0 END) AS pending
+        FROM filtered
+        GROUP BY y, m
+        ORDER BY y ASC, m ASC
+      `;
+
+      const result = await executeQuery(sql, { taskerId, months });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (err) {
+      console.error('❌ getTaskerBookingsMonthly:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  // Success vs cancel ratio
+  static async getTaskerSuccessCancel(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const months = Math.max(1, Math.min(24, parseInt(req.query.months || '6', 10)));
+
+      const sql = `
+        SELECT 
+          SUM(CASE WHEN status IN (N'Hoàn thành','Completed') THEN 1 ELSE 0 END) AS completed,
+          SUM(CASE WHEN status IN (N'Hủy','Cancelled') THEN 1 ELSE 0 END) AS cancelled
+        FROM Bookings
+        WHERE tasker_id = @taskerId
+          AND ISNULL(start_time, booking_time) >= DATEADD(month, -@months, GETDATE())
+      `;
+
+      const r = await executeQuery(sql, { taskerId, months });
+      const row = r.recordset?.[0] || { completed: 0, cancelled: 0 };
+      return res.json({ success: true, data: row });
+    } catch (err) {
+      console.error('❌ getTaskerSuccessCancel:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  // Upcoming within next N days and in-progress today
+  static async getTaskerUpcoming(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const days = Math.max(1, Math.min(30, parseInt(req.query.days || '7', 10)));
+
+      const sql = `
+        SELECT TOP 20 b.booking_id, b.status, b.start_time, b.end_time, b.location,
+               s.name AS service_name, sv.variant_name
+        FROM Bookings b
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
+        WHERE b.tasker_id = @taskerId
+          AND (
+            (b.status IN (N'Đã chấp nhận','Accepted') AND b.start_time BETWEEN GETDATE() AND DATEADD(day, @days, GETDATE()))
+            OR (b.status IN (N'Đang tiến hành','In Progress'))
+          )
+        ORDER BY ISNULL(b.start_time, b.booking_time) ASC
+      `;
+
+      const result = await executeQuery(sql, { taskerId, days });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (err) {
+      console.error('❌ getTaskerUpcoming:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  // Overdue: end_time has passed and not completed/cancelled
+  static async getTaskerOverdue(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+
+      const sql = `
+        SELECT TOP 20 b.booking_id, b.status, b.start_time, b.end_time, b.location,
+               s.name AS service_name, sv.variant_name
+        FROM Bookings b
+        LEFT JOIN Services s ON b.service_id = s.service_id
+        LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
+        WHERE b.tasker_id = @taskerId
+          AND b.end_time IS NOT NULL
+          AND b.end_time < GETDATE()
+          AND b.status NOT IN (N'Hoàn thành','Completed', N'Hủy','Cancelled')
+        ORDER BY b.end_time DESC
+      `;
+      const result = await executeQuery(sql, { taskerId });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (err) {
+      console.error('❌ getTaskerOverdue:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  // Recent reviews for the tasker
+  static async getTaskerRecentReviews(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const limit = Math.max(1, Math.min(20, parseInt(req.query.limit || '5', 10)));
+
+      const sql = `
+        SELECT TOP (@limit) r.rating_id, r.booking_id, r.rating, r.comment, r.created_at,
+               u.user_id AS customer_id, u.name AS customer_name
+        FROM Ratings r
+        LEFT JOIN Users u ON u.user_id = r.reviewer_id
+        WHERE r.reviewee_id = @taskerId
+        ORDER BY r.created_at DESC
+      `;
+      const result = await executeQuery(sql, { taskerId, limit });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (err) {
+      console.error('❌ getTaskerRecentReviews:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
+  // By service/variant: bookings and earnings
+  static async getTaskerByService(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) return res.status(401).json({ success: false, message: 'Unauthorized' });
+      const months = Math.max(1, Math.min(24, parseInt(req.query.months || '6', 10)));
+
+      const sql = `
+        WITH B AS (
+          SELECT b.booking_id, b.service_id, b.variant_id,
+                 b.booking_time
+          FROM Bookings b
+          WHERE b.tasker_id = @taskerId
+            AND b.booking_time >= DATEADD(month, -@months, GETDATE())
+        ),
+        W AS (
+          SELECT related_id AS booking_id, SUM(amount) AS earnings
+          FROM WalletTransactions
+          WHERE user_id = @taskerId
+            AND (type = 'credit' OR type = 'payout')
+            AND created_at >= DATEADD(month, -@months, GETDATE())
+          GROUP BY related_id
+        )
+        SELECT s.service_id, s.name AS service_name,
+               sv.variant_id, sv.variant_name,
+               COUNT(B.booking_id) AS bookings,
+               ISNULL(SUM(W.earnings), 0) AS earnings
+        FROM B
+        LEFT JOIN W ON W.booking_id = B.booking_id
+        LEFT JOIN Services s ON s.service_id = B.service_id
+        LEFT JOIN ServiceVariants sv ON sv.variant_id = B.variant_id
+        GROUP BY s.service_id, s.name, sv.variant_id, sv.variant_name
+        ORDER BY earnings DESC
+      `;
+
+      const result = await executeQuery(sql, { taskerId, months });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (err) {
+      console.error('❌ getTaskerByService:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
+  }
+
   static async updateNotes(req, res) {
     try {
       const id = req.params.id;
@@ -1728,5 +2143,13 @@ module.exports = {
   adminResolveComplaint: BookingController.adminResolveComplaint,
   completeJob: BookingController.completeJob,
   customerConfirmComplete: BookingController.customerConfirmComplete,
-  updateStatusSOS: BookingController.updateStatusSOS
+  updateStatusSOS: BookingController.updateStatusSOS,
+  getTaskerStats: BookingController.getTaskerStats
+  ,getTaskerEarningsSeries: BookingController.getTaskerEarningsSeries
+  ,getTaskerBookingsMonthly: BookingController.getTaskerBookingsMonthly
+  ,getTaskerSuccessCancel: BookingController.getTaskerSuccessCancel
+  ,getTaskerUpcoming: BookingController.getTaskerUpcoming
+  ,getTaskerOverdue: BookingController.getTaskerOverdue
+  ,getTaskerRecentReviews: BookingController.getTaskerRecentReviews
+  ,getTaskerByService: BookingController.getTaskerByService
 };

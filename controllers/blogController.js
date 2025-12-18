@@ -750,6 +750,54 @@ const rejectPost = async (req, res) => {
       .json({ success: false, message: "Không thể từ chối bài viết" });
   }
 };
+
+// Lấy bài viết liên quan theo tác giả hoặc dịch vụ
+const getRelatedPosts = async (req, res) => {
+  try {
+    const { id } = req.params; // post_id hiện tại
+    const { limit = 5 } = req.query;
+
+    const post = await Post.findById(id);
+    if (!post) {
+      return res.status(404).json({ success: false, message: "Post not found" });
+    }
+
+    const max = Math.max(1, Math.min(parseInt(limit) || 5, 50));
+
+    // Đơn giản hóa: lấy bài cùng tác giả hoặc trùng dịch vụ với bài hiện tại
+    const sql = `
+      SELECT TOP ${max}
+        p.post_id,
+        p.title,
+        p.post_date,
+        p.photo_urls,
+        p.user_id,
+        u.name AS author_name,
+        u.avatar_url AS author_avatar_url
+      FROM Posts p
+      JOIN Users u ON u.user_id = p.user_id
+      WHERE p.post_id <> @param1
+        AND p.status IN ('Approved', N'Đã phê duyệt')
+        AND (
+          p.user_id = (SELECT user_id FROM Posts WHERE post_id = @param1)
+          OR EXISTS (
+            SELECT 1 FROM PostServices ps2
+            WHERE ps2.post_id = p.post_id
+              AND ps2.service_id IN (
+                SELECT DISTINCT service_id FROM PostServices WHERE post_id = @param1
+              )
+          )
+        )
+      ORDER BY p.post_date DESC;`;
+
+    const result = await executeQuery(sql, [id]);
+    const related = result.recordset || [];
+    return res.json({ success: true, data: related });
+  } catch (error) {
+    console.error('Error getting related posts:', error);
+    res.status(500).json({ success: false, message: 'Error fetching related posts', error: error.message });
+  }
+};
 module.exports = {
   getPosts,
   getPostById,
@@ -767,6 +815,7 @@ module.exports = {
   updateComment,
   deleteComment,
   getPostServices,
+  getRelatedPosts,
   searchPosts,
   getStats,
   getAllPostsForStaff,

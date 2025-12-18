@@ -7,7 +7,23 @@ const {
   requireAdmin
 } = require("../middleware/auth");
 const bookingController = require("../controllers/bookingController");
-const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getTaskerBookings, getActiveSosJobs, checkSosAvailability } = require("../controllers/bookingController");
+const {
+  canRateTasker,
+  listMyBookings,
+  getBookingDetails,
+  updateFinalPrice,
+  getTaskerBookings,
+  getActiveSosJobs,
+  checkSosAvailability,
+  getTaskerStats,
+  getTaskerEarningsSeries,
+  getTaskerBookingsMonthly,
+  getTaskerSuccessCancel,
+  getTaskerUpcoming,
+  getTaskerOverdue,
+  getTaskerRecentReviews,
+  getTaskerByService,
+} = require("../controllers/bookingController");
 
 const sessionController = require("../controllers/sessionController");
 const { taskPhotosUpload, memoryUpload } = require("../config/cloudinary");
@@ -63,6 +79,18 @@ router.patch("/:bookingId/final-price", authenticateToken, updateFinalPrice);
 
 // 6️⃣ Tasker xem danh sách bookings của mình
 router.get("/tasker/my", authenticateToken, requireTasker, getTaskerBookings);
+
+// 7️⃣ Tasker overview stats
+router.get("/tasker/stats", authenticateToken, requireTasker, getTaskerStats);
+
+// Tasker analytics
+router.get("/tasker/earnings-series", authenticateToken, requireTasker, getTaskerEarningsSeries);
+router.get("/tasker/bookings-monthly", authenticateToken, requireTasker, getTaskerBookingsMonthly);
+router.get("/tasker/success-cancel", authenticateToken, requireTasker, getTaskerSuccessCancel);
+router.get("/tasker/upcoming", authenticateToken, requireTasker, getTaskerUpcoming);
+router.get("/tasker/overdue", authenticateToken, requireTasker, getTaskerOverdue);
+router.get("/tasker/reviews", authenticateToken, requireTasker, getTaskerRecentReviews);
+router.get("/tasker/by-service", authenticateToken, requireTasker, getTaskerByService);
 
 // Session-level endpoints for multi-day bookings
 // POST photos: multipart/form-data field 'photos' and body.type='before'|'after'

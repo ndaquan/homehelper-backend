@@ -24,6 +24,7 @@ router.delete('/:videoId', authenticateToken, requireTasker, VideoController.del
 router.get('/my-videos', authenticateToken, requireTasker, VideoController.getUserVideos);
 router.get('/user/:userId', VideoController.getPublicVideosByUser);
 router.get('/all-videos', VideoController.getAllVideos);
+router.get('/popular', VideoController.getPopularVideos);
 router.get('/:videoId', VideoController.getVideoById);
 router.post('/:videoId/comments', authenticateToken, VideoController.createVideoComment);
 router.put('/comments/:comment_id', authenticateToken, VideoController.updateVideoComment);
