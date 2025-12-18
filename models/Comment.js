@@ -47,7 +47,7 @@ class Comment {
   // Tìm bình luận theo ID
   static async findById(id) {
     const query = `
-      SELECT c.*, u.name as author_name, u.email as author_email, p.title as post_title
+      SELECT c.*, u.name as author_name, u.email as author_email, u.avatar_url as author_avatar_url, p.title as post_title
       FROM Comments c
       LEFT JOIN Users u ON c.user_id = u.user_id
       LEFT JOIN Posts p ON c.post_id = p.post_id
@@ -77,7 +77,8 @@ class Comment {
         c.content,
         c.created_at,
         u.name AS author_name,
-        u.email AS author_email
+        u.email AS author_email,
+        u.avatar_url AS author_avatar_url
       FROM Comments c
       LEFT JOIN Users u ON c.user_id = u.user_id
       WHERE c.post_id = @param1
@@ -142,7 +143,8 @@ class Comment {
         c.content,
         c.created_at,
         u.name AS author_name,
-        u.email AS author_email
+        u.email AS author_email,
+        u.avatar_url AS author_avatar_url
       FROM Comments c
       LEFT JOIN Users u ON c.user_id = u.user_id
       WHERE c.video_id = @param1
@@ -237,7 +239,7 @@ class Comment {
     const offset = (page - 1) * limit;
 
     const query = `
-      SELECT c.*, u.name as author_name, u.email as author_email
+      SELECT c.*, u.name as author_name, u.email as author_email, u.avatar_url as author_avatar_url
       FROM Comments c
       LEFT JOIN Users u ON c.user_id = u.user_id
       WHERE c.parent_comment_id = @param1
@@ -411,58 +413,58 @@ class Comment {
   }
 
   // Lấy cây bình luận (bình luận và trả lời)
-static async getCommentTree(videoId, options = {}) {
-  const { limit = 50 } = options;
+  static async getCommentTree(videoId, options = {}) {
+    const { limit = 50 } = options;
 
-  const query = `
+    const query = `
     SELECT 
       c.comment_id, c.post_id, c.video_id, c.user_id,
       c.parent_comment_id, c.content, c.created_at,
-      u.name as author_name, u.email as author_email
+      u.name as author_name, u.email as author_email, u.avatar_url as author_avatar_url
     FROM Comments c
     LEFT JOIN Users u ON c.user_id = u.user_id
     WHERE c.video_id = @param1
     ORDER BY c.created_at ASC
   `;
 
-  try {
-    const result = await executeQuery(query, [videoId]);
-    const comments = result.recordset;
+    try {
+      const result = await executeQuery(query, [videoId]);
+      const comments = result.recordset;
 
-    // Kiểm tra xem buildCommentTree có tồn tại không
-    if (typeof this.buildCommentTree !== 'function') {
-      throw new Error('buildCommentTree is not a function');
-    }
-
-    // Gọi buildCommentTree để tổ chức thành cây
-    const tree = this.buildCommentTree(comments);
-
-    return tree.slice(0, limit); // giới hạn số lượng root comments
-  } catch (error) {
-    throw new Error(`Lỗi khi lấy cây bình luận: ${error.message}`);
-  }
-}
-
-static buildCommentTree(comments) {
-  const map = {};
-  const roots = [];
-
-  comments.forEach(c => {
-    map[c.comment_id] = { ...c, replies: [] };
-  });
-
-  comments.forEach(c => {
-    if (c.parent_comment_id) {
-      if (map[c.parent_comment_id]) {
-        map[c.parent_comment_id].replies.push(map[c.comment_id]);
+      // Kiểm tra xem buildCommentTree có tồn tại không
+      if (typeof this.buildCommentTree !== 'function') {
+        throw new Error('buildCommentTree is not a function');
       }
-    } else {
-      roots.push(map[c.comment_id]);
-    }
-  });
 
-  return roots;
-}
+      // Gọi buildCommentTree để tổ chức thành cây
+      const tree = this.buildCommentTree(comments);
+
+      return tree.slice(0, limit); // giới hạn số lượng root comments
+    } catch (error) {
+      throw new Error(`Lỗi khi lấy cây bình luận: ${error.message}`);
+    }
+  }
+
+  static buildCommentTree(comments) {
+    const map = {};
+    const roots = [];
+
+    comments.forEach(c => {
+      map[c.comment_id] = { ...c, replies: [] };
+    });
+
+    comments.forEach(c => {
+      if (c.parent_comment_id) {
+        if (map[c.parent_comment_id]) {
+          map[c.parent_comment_id].replies.push(map[c.comment_id]);
+        }
+      } else {
+        roots.push(map[c.comment_id]);
+      }
+    });
+
+    return roots;
+  }
 }
 
 module.exports = Comment;

@@ -350,13 +350,41 @@ class SocketHandler {
       });
       console.log('🗂 taskInsertRes:', taskInsertRes && taskInsertRes.recordset ? taskInsertRes.recordset : taskInsertRes);
 
-      // Phát sóng cho tất cả Tasker cung cấp variant này
-      console.log('🔎 Querying taskers for variant:', variant_id);
-      const taskers = await executeQuery(`
+      // Phát sóng cho tất cả Tasker cung cấp SERVICE này TRONG PHẠM VI 15KM
+      // Parse lat/lng from location string (format: "lat,lng")
+      let lat = 0, lng = 0;
+      if (location && location.includes(',')) {
+        [lat, lng] = location.split(',').map(n => parseFloat(n.trim()));
+      }
+
+      console.log(`🔎 Querying taskers for service: ${service_id}, radius: 15km around (${lat}, ${lng})`);
+
+      let taskerQuery = `
         SELECT DISTINCT tsv.tasker_id
         FROM TaskerServiceVariants tsv
-        WHERE tsv.variant_id = @vId
-      `, { vId: variant_id });
+        JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+        JOIN Addresses a ON tsv.tasker_id = a.user_id
+        WHERE sv.service_id = @sId
+          AND a.lat != 0 AND a.lng != 0
+      `;
+
+      // Only apply distance filter if we have valid coords
+      if (lat && lng) {
+        // Haversine formula in SQL Server
+        taskerQuery += `
+          AND (6371000 * 2 * ATN2(SQRT(
+            SIN(RADIANS(a.lat - @lat)/2) * SIN(RADIANS(a.lat - @lat)/2) + 
+            COS(RADIANS(@lat)) * COS(RADIANS(a.lat)) * 
+            SIN(RADIANS(a.lng - @lng)/2) * SIN(RADIANS(a.lng - @lng)/2)
+          ), SQRT(1 - (
+            SIN(RADIANS(a.lat - @lat)/2) * SIN(RADIANS(a.lat - @lat)/2) + 
+            COS(RADIANS(@lat)) * COS(RADIANS(a.lat)) * 
+            SIN(RADIANS(a.lng - @lng)/2) * SIN(RADIANS(a.lng - @lng)/2)
+          )))) <= 15000
+        `;
+      }
+
+      const taskers = await executeQuery(taskerQuery, { sId: service_id, lat, lng });
 
       console.log('📊 taskers result:', taskers && taskers.recordset ? taskers.recordset : taskers);
 
@@ -380,7 +408,9 @@ class SocketHandler {
         final_price: base_price,
         type: 'SOS',
         sos_expires_at: sosExpiresAt,
-        expires_in_seconds: 600
+        expires_in_seconds: 600,
+        // Send lat/lng for client-side distance calc if needed
+        lat, lng
       };
 
       // Use unified notification service to notify customer + taskers and emit broadcast
@@ -390,7 +420,8 @@ class SocketHandler {
           customer_id: socket.userId,
           variant_id,
           service_id,
-          location: savedLocation,
+          location, // Pass raw "lat,lng" string for notification service to parse
+          saved_location: savedLocation
         });
       } catch (notifyErr) {
         console.warn('[SOS] notifySosRequestToTaskers failed:', notifyErr?.message || notifyErr);
@@ -409,7 +440,7 @@ class SocketHandler {
           }
         }
       } else {
-        console.warn('⚠️ No taskers found for variant:', variant_id);
+        console.log('⚠️ No taskers found for service within 15km:', service_id);
       }
 
       socket.emit('sos_job_created', {
@@ -502,11 +533,16 @@ class SocketHandler {
         this.io.emit('sos_job_taken', takenPayload);
 
         try {
-          // Find variant_id for this booking so we can notify taskers who were targeted
-          const bidRes = await executeQuery(`SELECT variant_id FROM Bookings WHERE booking_id = @id`, { id: booking_id });
-          const variantId = bidRes.recordset?.[0]?.variant_id;
-          if (variantId) {
-            const tRes = await executeQuery(`SELECT DISTINCT tsv.tasker_id FROM TaskerServiceVariants tsv WHERE tsv.variant_id = @vId`, { vId: variantId });
+          // Find service_id for this booking so we can notify taskers who were targeted
+          const bidRes = await executeQuery(`SELECT service_id FROM Bookings WHERE booking_id = @id`, { id: booking_id });
+          const serviceId = bidRes.recordset?.[0]?.service_id;
+          if (serviceId) {
+            const tRes = await executeQuery(`
+              SELECT DISTINCT tsv.tasker_id
+              FROM TaskerServiceVariants tsv
+              JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+              WHERE sv.service_id = @sId
+            `, { sId: serviceId });
             const targeted = tRes.recordset || [];
             targeted.forEach(t => {
               if (t.tasker_id === socket.userId) return; // skip the taker

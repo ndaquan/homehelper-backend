@@ -59,7 +59,7 @@ class Post {
   // Tìm bài đăng theo ID
   static async findById(id) {
     const query = `
-    SELECT p.*, u.name as author_name, u.email as author_email
+    SELECT p.*, u.name as author_name, u.email as author_email, u.avatar_url as author_avatar_url
     FROM Posts p
     LEFT JOIN Users u ON p.user_id = u.user_id
     WHERE p.post_id = @param1
@@ -74,6 +74,7 @@ class Post {
       // Gán thông tin tác giả vào object trả về
       post.author_name = row.author_name || "Ẩn danh";
       post.author_email = row.author_email || "";
+      post.author_avatar_url = row.author_avatar_url;
       return post;
     } catch (error) {
       throw new Error(`Error finding post: ${error.message}`);
@@ -168,7 +169,7 @@ class Post {
         post.likes = row.likes_count;
         post.comments_count = row.comments_count;
         post.author_name = row.author_name || "Ẩn danh";
-        post.author_email = row.author_email || ""; 
+        post.author_email = row.author_email || "";
         post.author_avatar_url = row.author_avatar_url;
 
         return post;
@@ -324,7 +325,7 @@ class Post {
     }
 
     updates.push("updated_at = GETDATE()");
-  values.push(this.post_id);
+    values.push(this.post_id);
 
     const query = `UPDATE Posts SET ${updates.join(
       ", "
@@ -376,7 +377,7 @@ class Post {
     } catch (error) {
       try {
         await tx.rollback();
-      } catch (e) {}
+      } catch (e) { }
       throw new Error(`Error deleting post: ${error.message}`);
     }
   }

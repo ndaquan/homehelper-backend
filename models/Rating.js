@@ -1,6 +1,6 @@
 // models/Rating.js
 const { executeQuery } = require("../config/database");
-const { processReview } = require("../config/gemini.service"); 
+const { processReview } = require("../config/gemini.service");
 
 class Rating {
   static async getByTaskerId(taskerId, currentUserId = null) {
@@ -17,7 +17,9 @@ class Rating {
       r.staff_reply_date,
       r.helpful,   
       s.name AS service_name,
-      0 AS userLiked
+      0 AS userLiked,
+      (SELECT TOP 1 photo_url FROM TaskPhotos tp WHERE tp.booking_id = r.booking_id AND tp.photo_type = 'after') AS booking_image,
+      (SELECT TOP 1 description FROM Tasks t WHERE t.booking_id = r.booking_id) AS task_description
     FROM Ratings r
     JOIN Users u ON r.reviewer_id = u.user_id
     JOIN Bookings b ON r.booking_id = b.booking_id
@@ -42,14 +44,16 @@ class Rating {
         staff_reply_date: r.staff_reply_date || null,
         helpful: r.helpful || 0,
         userLiked: r.userLiked === 1,
+        booking_image: r.booking_image || null,
+        task_description: r.task_description || ""
       })),
       total: rows.length,
       average: rows.length
         ? Number(
-            (rows.reduce((sum, r) => sum + r.rating, 0) / rows.length).toFixed(
-              1
-            )
+          (rows.reduce((sum, r) => sum + r.rating, 0) / rows.length).toFixed(
+            1
           )
+        )
         : 0,
       ratingsCount: rows.reduce(
         (acc, r) => {
@@ -71,11 +75,12 @@ class Rating {
     try {
       const reviewCheck = await processReview(comment, rating);
 
-      // if (!reviewCheck.allow) {
-      //   throw new Error(
-      //     "Bình luận chứa từ ngữ không phù hợp. Không thể đăng đánh giá."
-      //   );
-      // }
+
+      if (!reviewCheck.allow) {
+        throw new Error(
+          "Bình luận chứa từ ngữ không phù hợp. Không thể đăng đánh giá. Vui lòng chỉnh sửa lại."
+        );
+      }
 
       const query = `
       INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, status, created_at)

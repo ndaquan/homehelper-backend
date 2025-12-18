@@ -319,6 +319,25 @@ class BookingController {
         return res.status(404).json({ success: false, message: "Không tìm thấy booking" });
       }
 
+      const booking = result.recordset[0];
+      const userId = req.user.userId;
+
+      // 🛡️ SECURITY CHECK 🛡️
+      const isOwner = booking.tasker_id === userId || booking.customer_id === userId;
+      // SOS jobs in "Chờ xử lý" with no tasker assigned are public to taskers
+      const isAvailableSOS = booking.type === 'SOS' && booking.status === 'Chờ xử lý' && booking.tasker_id === null;
+
+      if (!isOwner && !isAvailableSOS) {
+        if (booking.type === 'SOS' && booking.tasker_id && booking.tasker_id !== userId) {
+          return res.status(403).json({
+            success: false,
+            message: "Rất tiếc, đơn SOS này đã được người khác nhận.",
+            code: "SOS_TAKEN"
+          });
+        }
+        return res.status(403).json({ success: false, message: "Bạn không có quyền truy cập booking này" });
+      }
+
       res.json({
         success: true,
         booking: result.recordset[0],
@@ -940,8 +959,9 @@ class BookingController {
           AND b.sos_expires_at > GETDATE()
           AND EXISTS (
             SELECT 1 FROM TaskerServiceVariants tsv 
+            JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
             WHERE tsv.tasker_id = @taskerId 
-            AND tsv.variant_id = b.variant_id
+            AND sv.service_id = b.service_id
           )
         ORDER BY b.sos_expires_at ASC
       `;

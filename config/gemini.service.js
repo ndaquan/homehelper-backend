@@ -52,8 +52,7 @@ async function moderateContent(text) {
   } catch (error) {
     fs.appendFileSync(
       logFile,
-      `\n[${new Date().toISOString()}] ERROR: ${
-        error.message
+      `\n[${new Date().toISOString()}] ERROR: ${error.message
       }\nRESPONSE: ${JSON.stringify(error.response?.data)}\n`
     );
     return false;
@@ -427,9 +426,8 @@ YÊU CẦU:
       genericPatterns.some((p) => p.test(parsed.cert_name.trim()))
     ) {
       if (programVi) {
-        parsed.cert_name = `Chứng chỉ đào tạo – ${programVi}${
-          programEn ? ` (${programEn})` : ""
-        }`;
+        parsed.cert_name = `Chứng chỉ đào tạo – ${programVi}${programEn ? ` (${programEn})` : ""
+          }`;
       }
     }
   } catch (_) {
@@ -444,11 +442,9 @@ YÊU CẦU:
       const logEntry = `\n[${new Date().toISOString()}]\nURL: ${certUrl}\nRAW(JSON?): ${raw.substring(
         0,
         2000
-      )}\nissued_date_raw(JSON): ${
-        json.issued_date_raw
-      }\nHeuristic dateLine: ${dateLineTried}\nFinal ISO: ${
-        parsed.issued_date_iso
-      }\nParsed Name: ${parsed.cert_name}\n`;
+      )}\nissued_date_raw(JSON): ${json.issued_date_raw
+        }\nHeuristic dateLine: ${dateLineTried}\nFinal ISO: ${parsed.issued_date_iso
+        }\nParsed Name: ${parsed.cert_name}\n`;
       fs.appendFileSync(logFile, logEntry);
       console.log("🧪 CERT_AI_LOG:", {
         certUrl,
@@ -780,7 +776,7 @@ async function chatbotResponse(userMessage, conversationHistory = []) {
   } catch (error) {
     console.error("🔴 Chatbot API error:", error.message);
     console.error("🔴 Error details:", error.response?.data || error);
-    
+
     fs.appendFileSync(
       logFile,
       `\n[${new Date().toISOString()}] ERROR: ${error.message}\nUSER_MSG: ${trimmedMessage}\nDETAILS: ${JSON.stringify(error.response?.data || {})}\n`
