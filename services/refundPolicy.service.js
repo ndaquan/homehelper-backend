@@ -11,13 +11,8 @@ function hoursUntil(startTimeISO) {
  * Returns { ruleCode, refundPercent, compensationPercent, note }
  */
 function calculateRefundPolicy(booking, cancelledBy) {
-  // Tổng tiền làm căn cứ hoàn/bồi thường: nếu đã thanh toán dùng final_price, chưa thanh toán fallback expected_price.
-  const total = Number(
-    booking.paid_amount ??
-    booking.final_price ??
-    booking.expected_price ??
-    0
-  );
+  // Tổng tiền làm căn cứ hoàn/bồi thường: chỉ sử dụng paid_amount vì đó là số tiền thực tế khách đã trả.
+  const total = Number(booking.paid_amount || 0);
 
   // R6: Khách không có mặt (no_show) = giống <4h (R4) nhưng yêu cầu bằng chứng ở tầng controller
   if (cancelledBy === "no_show") {

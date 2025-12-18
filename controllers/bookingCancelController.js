@@ -102,10 +102,8 @@ class BookingCancelController {
                 let penalty = (booking.type === 'SOS') ? -30 : (cancelledBy === "tasker" ? -10 : -20);
                 await updateReliabilityScore(booking.tasker_id, penalty);
 
-                // ⭐ Refund FULL cho khách
-                const refundAmount = (booking.final_price && booking.final_price > 0)
-                    ? booking.final_price
-                    : booking.expected_price || 0;
+                // ⭐ Refund FULL cho khách (Dùng paid_amount làm gốc)
+                const refundAmount = Number(booking.paid_amount || 0);
 
                 if (refundAmount > 0) {
                     await executeQuery(

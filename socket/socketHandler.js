@@ -244,8 +244,8 @@ class SocketHandler {
       return socket.emit('error', { message: 'Chỉ khách hàng mới tạo được SOS job' });
     }
 
-    const { variant_id, location, address, start_time, task, duration_hours, duration_days, type: workType, expected_price: client_expected_price } = data || {};
-    console.log('📥 createSOS payload:', { variant_id, location, address, start_time, task, duration_hours, duration_days, workType, client_expected_price });
+    const { variant_id, location, address, start_time, task, duration_hours, duration_days, type: workType, expected_price: client_expected_price, total_sessions, dates } = data || {};
+    console.log('📥 createSOS payload:', { variant_id, location, address, start_time, task, duration_hours, duration_days, workType, client_expected_price, total_sessions, dates });
 
     // Accept either an address (preferred) or location coordinates
     const hasLocation = (address && String(address).trim()) || (location && String(location).trim());
@@ -302,7 +302,7 @@ class SocketHandler {
           customer_id, tasker_id, service_id, variant_id,
           booking_time, start_time, end_time, location, status,
           base_price, surcharge, type,
-          sos_expires_at, expected_price
+          sos_expires_at, expected_price, total_sessions
         )
         OUTPUT INSERTED.booking_id AS inserted_id
         VALUES (
@@ -315,7 +315,7 @@ class SocketHandler {
             END,
           @location, N'Chờ xử lý',
           @base_price, 0, @type,
-          DATEADD(MINUTE, 10, GETDATE()), @expected_price
+          DATEADD(MINUTE, 10, GETDATE()), @expected_price, @total_sessions
         )
       `, {
         customer_id: socket.userId,
@@ -327,6 +327,7 @@ class SocketHandler {
         location: savedLocation,
         base_price,
         expected_price: expected_price,
+        total_sessions: total_sessions || 1,
         type: 'SOS'
       });
 
@@ -337,18 +338,40 @@ class SocketHandler {
       }
       console.log('✅ Booking created with id:', bookingId);
 
-      // Tạo Task mô tả công việc
-      console.log('📝 Inserting task for booking:', bookingId);
-      const taskInsertRes = await executeQuery(`
-        INSERT INTO Tasks (booking_id, description, checklist, photos, completed)
-        VALUES (@bid, @desc, @check, @photos, 0)
-      `, {
-        bid: bookingId,
-        desc: task.description.trim(),
-        check: task.checklist || null,
-        photos: JSON.stringify(task.photos || [])
-      });
-      console.log('🗂 taskInsertRes:', taskInsertRes && taskInsertRes.recordset ? taskInsertRes.recordset : taskInsertRes);
+      // Tạo các Tasks (Sessions) cho booking
+      const sessionsCount = Number(total_sessions) || 1;
+      const computedStartTime = new Date(Date.now() + 20 * 60 * 1000);
+
+      // Use Vietnam time for fallback session date to match frontend expectation
+      const vnNow = new Date(Date.now() + (7 * 60 + 20) * 60 * 1000);
+      const vnDateStr = vnNow.toISOString().split('T')[0];
+
+      const sessionDates = (Array.isArray(dates) && dates.length > 0) ? dates : [vnDateStr];
+
+      console.log(`📝 Inserting ${sessionsCount} tasks for booking:`, bookingId);
+
+      for (let i = 0; i < sessionsCount; i++) {
+        const currentSessionDate = sessionDates[i] || null;
+
+        await executeQuery(`
+          INSERT INTO Tasks (
+            booking_id, description, checklist, photos, completed,
+            session_number, session_date, status
+          )
+          VALUES (
+            @bid, @desc, @check, @photos, 0,
+            @sNum, @sDate, N'Chờ thực hiện'
+          )
+        `, {
+          bid: bookingId,
+          desc: task.description.trim(),
+          check: task.checklist || null,
+          photos: JSON.stringify(task.photos || []),
+          sNum: i + 1,
+          sDate: currentSessionDate ? new Date(currentSessionDate) : null
+        });
+      }
+      console.log(`✅ successfully created ${sessionsCount} sessions.`);
 
       // Phát sóng cho tất cả Tasker cung cấp SERVICE này TRONG PHẠM VI 15KM
       // Parse lat/lng from location string (format: "lat,lng")
@@ -392,7 +415,6 @@ class SocketHandler {
       const sosExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       // Compute the same start_time on the Node server so emitted payload matches DB
-      const computedStartTime = new Date(Date.now() + 20 * 60 * 1000);
 
       const sosJob = {
         booking_id: bookingId,
@@ -406,6 +428,8 @@ class SocketHandler {
         start_time: computedStartTime.toISOString(),
         description: task.description,
         final_price: base_price,
+        total_sessions: sessionsCount,
+        dates: sessionDates,
         type: 'SOS',
         sos_expires_at: sosExpiresAt,
         expires_in_seconds: 600,

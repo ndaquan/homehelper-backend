@@ -882,7 +882,7 @@ exports.getWithServices = async (req, res) => {
     const { id } = req.params;
     console.log("🟡 [Controller] Nhận request id =", id);
 
-    const tasker = await Tasker.findById(id);
+    const tasker = await Tasker.findByIdWithReviews(id);
     console.log("🟢 [Controller] Tasker:", tasker);
 
     const allTaskers = await Tasker.findAll("", "");

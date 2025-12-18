@@ -576,23 +576,24 @@ class BookingController {
 
           // ⭐ Lấy giá để trả cho tasker
           const priceRes = await executeQuery(
-            `SELECT expected_price, final_price 
+            `SELECT expected_price, final_price, quantity 
             FROM Bookings 
             WHERE booking_id = @param1`,
             [id]
           );
 
-          const { expected_price, final_price } = priceRes.recordset[0];
+          const { expected_price, final_price, quantity } = priceRes.recordset[0];
+          const safeQuantity = (quantity && quantity > 0) ? quantity : 1;
 
           // Giá gốc tasker lẽ ra nhận
           const rawAmount = final_price && final_price > 0
             ? final_price
             : expected_price;
 
-          // ❗ Trừ phí hệ thống 10%
-          const payoutAmount = rawAmount * 0.9;
+          // ❗ Trừ phí hệ thống 10% (Tính theo đơn giá * số lượng)
+          const payoutAmount = rawAmount * safeQuantity * 0.9;
 
-          console.log(`💰 Tasker ${booking.tasker_id} được nhận:`, payoutAmount);
+          console.log(`💰 Tasker ${booking.tasker_id} được nhận:`, payoutAmount, `(Đơn giá: ${rawAmount}, SL: ${safeQuantity})`);
 
           // ⭐ Ghi transaction credit cho tasker
           await executeQuery(
@@ -600,11 +601,13 @@ class BookingController {
               (user_id, amount, type, purpose, related_id, note, created_at)
             VALUES 
               (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
-              N'Thanh toán cho tasker sau khi hoàn thành', SYSUTCDATETIME())`,
+              N'Thanh toán cho tasker sau khi hoàn thành (Đơn giá: ' + CAST(@raw as nvarchar) + N' x SL: ' + CAST(@qty as nvarchar) + N')', SYSUTCDATETIME())`,
             {
               user_id: booking.tasker_id,
               amount: payoutAmount,
               booking_id: id,
+              raw: rawAmount,
+              qty: safeQuantity
             }
           );
 
@@ -787,62 +790,63 @@ class BookingController {
       }
 
       // Allow either participant (customer or tasker) to fetch details; otherwise 403
-      const detailsRes = await executeQuery(
-        `
+      const detailsQuery = `
           SELECT 
-            b.booking_id,
-            b.customer_id,
-            b.tasker_id,
-            b.service_id,
-            b.variant_id,
-            b.start_time,
-            b.end_time,
-            b.location,
-            b.status,
-            b.final_price,
-            b.expected_price,
-            b.quantity,
-            b.total_sessions,
-            b.description,
-            sv.unit,
-            sv.price_min,
-            sv.price_max,
+            /* Booking basics */
+            b.booking_id, b.customer_id, b.tasker_id, b.service_id, b.variant_id,
+            b.booking_time, b.start_time, b.end_time, b.location, b.status,
+            b.final_price, b.expected_price, b.quantity, b.total_sessions, b.description,
+            
+            /* Service info */
             s.name AS service_name,
-            sv.variant_name,
+            sv.variant_name, sv.unit, sv.price_min, sv.price_max,
+            
+            /* Customer (Bên B) Info from Users table */
             uc.name AS customer_name,
+            uc.email AS customer_email,
+            uc.phone AS customer_phone,
+            uc.avatar_url AS customer_avatar,
+            uc.cccd_url AS customer_cccd_url,
+            
+            /* Tasker (Bên A) Info from Users table */
             ut.name AS tasker_name,
-            tk.description AS task_description,
-            tk.checklist AS task_checklist,
-            tk.photos AS task_photos
+            ut.email AS tasker_email,
+            ut.phone AS tasker_phone,
+            ut.avatar_url AS tasker_avatar,
+            ut.cccd_url AS tasker_cccd_url,
+            
+            /* Tasker specific from Taskers table */
+            tkr.signature_url AS tasker_signature_url,
+            tkr.Introduce AS tasker_introduce,
+            tkr.rating AS tasker_rating
+            
           FROM Bookings b
           LEFT JOIN Services s ON b.service_id = s.service_id
           LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
-          LEFT JOIN Users uc ON uc.user_id = b.customer_id
-          LEFT JOIN Users ut ON ut.user_id = b.tasker_id
-          LEFT JOIN Tasks tk ON tk.booking_id = b.booking_id
-          WHERE b.booking_id = @param1
-        `,
-        [id]
-      );
+          LEFT JOIN Users uc ON b.customer_id = uc.user_id
+          LEFT JOIN Users ut ON b.tasker_id = ut.user_id
+          LEFT JOIN Taskers tkr ON b.tasker_id = tkr.tasker_id
+          WHERE b.booking_id = @bookingId
+      `;
 
+      const detailsRes = await executeQuery(detailsQuery, { bookingId: id });
       const booking = detailsRes.recordset?.[0];
 
-      console.log("🔍 [getBookingDetails] DB Result:", booking);
-
       if (!booking) {
-        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
+        return res.status(404).json({ success: false, message: "Hợp đồng không tồn tại" });
       }
 
       const userId = req.user.userId;
-
-      if (
-        String(booking.customer_id) !== String(userId) &&
-        String(booking.tasker_id) !== String(userId)
-      ) {
-        return res.status(403).json({ success: false, message: "Không có quyền xem booking này" });
+      if (String(booking.customer_id) !== String(userId) && String(booking.tasker_id) !== String(userId)) {
+        return res.status(403).json({ success: false, message: "Không có quyền xem hợp đồng này" });
       }
 
-      // FE yêu cầu phải trả "booking"
+      console.log(`[getBookingDetails] Returning booking #${id}`, {
+        customerEmail: booking.customer_email,
+        taskerEmail: booking.tasker_email,
+        hasSig: !!booking.tasker_signature_url
+      });
+
       return res.json({ success: true, booking });
 
     } catch (error) {
@@ -875,7 +879,7 @@ class BookingController {
       }
 
       await executeQuery(
-        `UPDATE Bookings SET base_price = @param1 WHERE booking_id = @param2`,
+        `UPDATE Bookings SET final_price = @param1 WHERE booking_id = @param2`,
         [Number(price), bookingId]
       );
       return res.json({ success: true, bookingId, final_price: Number(price) });
@@ -1129,33 +1133,33 @@ class BookingController {
       const completed_this_month = completedMonthRes.recordset?.[0]?.count || 0;
 
       // Earnings: sum WalletTransactions where user_id = tasker and type in ('credit','payout')
-    const earningsTotalRes = await executeQuery(
-      `
+      const earningsTotalRes = await executeQuery(
+        `
       SELECT
-        ISNULL(SUM(b.expected_price * 0.9), 0) AS total
+        ISNULL(SUM(ISNULL(b.final_price, b.expected_price) * ISNULL(b.quantity, 1) * 0.9), 0) AS total
       FROM Bookings b
       WHERE b.tasker_id = @taskerId
         AND b.status IN (N'Hoàn thành','Completed')
       `,
-      { taskerId }
-    );
+        { taskerId }
+      );
 
-    const earnings_total = earningsTotalRes.recordset?.[0]?.total || 0;
+      const earnings_total = earningsTotalRes.recordset?.[0]?.total || 0;
 
-    const earningsMonthRes = await executeQuery(
-      `
+      const earningsMonthRes = await executeQuery(
+        `
       SELECT
-        ISNULL(SUM(expected_price * 0.9), 0) AS total
+        ISNULL(SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9), 0) AS total
       FROM Bookings
       WHERE tasker_id = @taskerId
         AND status IN (N'Hoàn thành','Completed')
         AND YEAR(end_time) = YEAR(GETDATE())
         AND MONTH(end_time) = MONTH(GETDATE())
       `,
-      { taskerId }
-    );
+        { taskerId }
+      );
 
-    const earnings_this_month = earningsMonthRes.recordset?.[0]?.total || 0;
+      const earnings_this_month = earningsMonthRes.recordset?.[0]?.total || 0;
 
       // Average rating for tasker (if Ratings table exists)
       let rating_avg = null;
@@ -1198,36 +1202,36 @@ class BookingController {
     }
   }
 
-static async getTaskerEarningsSeries(req, res) {
-  try {
-    const taskerId = req.user?.userId;
-    if (!taskerId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
-    }
+  static async getTaskerEarningsSeries(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
 
-    const granularity = (req.query.granularity || 'month').toLowerCase();
-    const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
+      const granularity = (req.query.granularity || 'month').toLowerCase();
+      const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
 
-    // Time column to use
-    const timeCol = 'ISNULL(end_time, start_time)';
+      // Time column to use
+      const timeCol = 'ISNULL(end_time, start_time)';
 
-    let dateFilter = `${timeCol} >= DATEADD(month, -@periods, GETDATE())`;
-    if (granularity === 'week') {
-      dateFilter = `${timeCol} >= DATEADD(week, -@periods, GETDATE())`;
-    }
-    if (granularity === 'quarter') {
-      dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, GETDATE())`;
-    }
+      let dateFilter = `${timeCol} >= DATEADD(month, -@periods, GETDATE())`;
+      if (granularity === 'week') {
+        dateFilter = `${timeCol} >= DATEADD(week, -@periods, GETDATE())`;
+      }
+      if (granularity === 'quarter') {
+        dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, GETDATE())`;
+      }
 
-    let sql = '';
+      let sql = '';
 
-    if (granularity === 'week') {
-      sql = `
+      if (granularity === 'week') {
+        sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
             DATEPART(ISO_WEEK, ${timeCol}) AS x,
-            SUM(expected_price * 0.9) AS total
+            SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9) AS total
           FROM Bookings
           WHERE tasker_id = @taskerId
             AND status IN (N'Hoàn thành','Completed')
@@ -1242,13 +1246,13 @@ static async getTaskerEarningsSeries(req, res) {
         FROM G
         ORDER BY y ASC, x ASC
       `;
-    } else if (granularity === 'quarter') {
-      sql = `
+      } else if (granularity === 'quarter') {
+        sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
             DATEPART(QUARTER, ${timeCol}) AS x,
-            SUM(expected_price * 0.9) AS total
+            SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9) AS total
           FROM Bookings
           WHERE tasker_id = @taskerId
             AND status IN (N'Hoàn thành','Completed')
@@ -1263,14 +1267,14 @@ static async getTaskerEarningsSeries(req, res) {
         FROM G
         ORDER BY y ASC, x ASC
       `;
-    } else {
-      // month (default)
-      sql = `
+      } else {
+        // month (default)
+        sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
             MONTH(${timeCol}) AS x,
-            SUM(expected_price * 0.9) AS total
+            SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9) AS total
           FROM Bookings
           WHERE tasker_id = @taskerId
             AND status IN (N'Hoàn thành','Completed')
@@ -1285,15 +1289,15 @@ static async getTaskerEarningsSeries(req, res) {
         FROM G
         ORDER BY y ASC, x ASC
       `;
-    }
+      }
 
-    const result = await executeQuery(sql, { taskerId, periods });
-    return res.json({ success: true, data: result.recordset || [] });
-  } catch (err) {
-    console.error('❌ getTaskerEarningsSeries:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
+      const result = await executeQuery(sql, { taskerId, periods });
+      return res.json({ success: true, data: result.recordset || [] });
+    } catch (err) {
+      console.error('❌ getTaskerEarningsSeries:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
   }
-}
 
   // Bookings by month: completed vs pending-like
   static async getTaskerBookingsMonthly(req, res) {
@@ -1911,10 +1915,16 @@ static async getTaskerEarningsSeries(req, res) {
       }
 
       // Rule tính tiền (đơn đã thanh toán)
-      const totalPrice =
+      const safeQuantity = (booking.quantity && booking.quantity > 0) ? booking.quantity : 1;
+      const unitPrice =
         booking.final_price && booking.final_price > 0
           ? booking.final_price
           : booking.expected_price || 0;
+
+      const agreedTotal = unitPrice * safeQuantity;
+      const actualPaid = Number(booking.paid_amount || 0);
+
+      const refundAmount = actualPaid; // Hoàn đúng số tiền đã trả
 
       // ==========================================
       // ✔ CASE 1 — APPROVED
@@ -1926,12 +1936,18 @@ static async getTaskerEarningsSeries(req, res) {
         await updateReliabilityScore(booking.tasker_id, -30);
 
         // Refund FULL cho khách (nếu đã thanh toán)
-        if (totalPrice > 0) {
+        if (refundAmount > 0) {
           await executeQuery(
             `INSERT INTO WalletTransactions 
            (user_id, amount, type, purpose, related_id, note, created_at)
-           VALUES (@param1, @param2, N'refund', N'complaint_approved', @param3, N'Khiếu nại được duyệt, hoàn tiền cho khách', GETDATE())`,
-            [booking.customer_id, totalPrice, bookingId]
+           VALUES (@param1, @param2, N'refund', N'complaint_approved', @param3, 
+           N'Hoàn tiền khiếu nại (Theo số tiền thực trả: ' + CAST(@paid as nvarchar) + N')', GETDATE())`,
+            {
+              param1: booking.customer_id,
+              param2: refundAmount,
+              param3: bookingId,
+              paid: actualPaid
+            }
           );
         }
 
@@ -1960,7 +1976,7 @@ static async getTaskerEarningsSeries(req, res) {
           success: true,
           message: "Đã duyệt khiếu nại",
           result: {
-            refund: totalPrice,
+            refund: refundAmount,
             voucher: "10%",
             scoreChange: -30
           }
@@ -1973,15 +1989,21 @@ static async getTaskerEarningsSeries(req, res) {
       if (decision === "rejected") {
         console.log("[AdminReview][resolve] CASE: REJECTED");
 
-        const payout = Math.round(totalPrice * 0.9); // 90% cho tasker
+        const payout = actualPaid; // Tasker nhận 100% số tiền khách đã trả (không trừ phí)
 
         // Cộng tiền cho tasker
         if (payout > 0) {
           await executeQuery(
             `INSERT INTO WalletTransactions 
           (user_id, amount, type, purpose, related_id, note, created_at)
-          VALUES (@param1, @param2, N'credit', N'complaint_rejected', @param3, N'Khiếu nại bị từ chối, tasker nhận tiền', GETDATE())`,
-            [booking.tasker_id, payout, bookingId]
+          VALUES (@param1, @param2, N'credit', N'complaint_rejected', @param3, 
+          N'Thanh toán sau khiếu nại bị bác bỏ (Theo số tiền thực trả: ' + CAST(@paid as nvarchar) + N')', GETDATE())`,
+            {
+              param1: booking.tasker_id,
+              param2: payout,
+              param3: bookingId,
+              paid: actualPaid
+            }
           );
         }
 
@@ -2060,6 +2082,16 @@ static async getTaskerEarningsSeries(req, res) {
           { bid: bookingId, sDate: session_date }
         );
         specificTaskId = taskRes.recordset?.[0]?.task_id;
+
+        // Fallback: If not found by exact date, and there is exactly ONE task for this booking, use it.
+        // This solves timezone mismatch issues (e.g. server UTC vs client +7) for single-session bookings.
+        if (!specificTaskId) {
+          const allTasksRes = await executeQuery("SELECT task_id FROM Tasks WHERE booking_id = @bid", { bid: bookingId });
+          if (allTasksRes.recordset.length === 1) {
+            specificTaskId = allTasksRes.recordset[0].task_id;
+            console.log("ℹ️ [COMPLETE JOB] No exact date match, fallback to the only task found:", specificTaskId);
+          }
+        }
 
         if (!specificTaskId) {
           console.warn(`⚠️ Session not found for date ${session_date} (Booking ${bookingId}). Aborting update to avoid overwriting all sessions.`);
@@ -2247,15 +2279,14 @@ static async getTaskerEarningsSeries(req, res) {
     console.log("[customerConfirmComplete] customerId:", customerId);
 
     try {
-      // Kiểm tra input
       if (!bookingId || !customerId) {
         return res.status(400).json({ success: false, message: "Thiếu bookingId hoặc customerId" });
       }
 
-      // Lấy booking
+      // 1. Lấy thông tin booking kèm quantity
       const bookingRes = await executeQuery(
-        `SELECT booking_id, customer_id, tasker_id, expected_price, final_price 
-       FROM Bookings WHERE booking_id = @param1`,
+        `SELECT booking_id, customer_id, tasker_id, expected_price, final_price, quantity 
+         FROM Bookings WHERE booking_id = @param1`,
         [bookingId]
       );
       const booking = bookingRes.recordset?.[0];
@@ -2264,81 +2295,60 @@ static async getTaskerEarningsSeries(req, res) {
         return res.status(404).json({ success: false, message: "Booking không tồn tại" });
       }
 
-      // Kiểm tra booking có phải của customer không
       if (String(booking.customer_id) !== String(customerId)) {
-        return res.status(403).json({
-          success: false,
-          message: "Bạn không có quyền xác nhận đơn này"
-        });
+        return res.status(403).json({ success: false, message: "Bạn không có quyền xác nhận đơn này" });
       }
 
-      // Kiểm tra đã hoàn thành chưa
       const statusRes = await executeQuery(
         `SELECT status FROM Bookings WHERE booking_id = @param1`,
         [bookingId]
       );
-
       const currentStatus = statusRes.recordset?.[0]?.status;
 
       if (currentStatus === "Hoàn thành") {
         return res.json({ success: true, message: "Đơn đã ở trạng thái hoàn thành" });
       }
 
-      // -----------------------------
-      // 1️⃣ Cập nhật trạng thái booking
-      // -----------------------------
-      console.log("[customerConfirmComplete] Updating status to Hoàn thành");
+      // 2. Cập nhật trạng thái
       await executeQuery(
         `UPDATE Bookings SET status = N'Hoàn thành' WHERE booking_id = @param1`,
         [bookingId]
       );
 
-      // -----------------------------
-      // 2️⃣ Cộng +5 uy tín cho tasker
-      // -----------------------------
-      console.log(`🎉 +5 uy tín cho tasker ${booking.tasker_id}`);
+      // 3. Cộng uy tín
       await updateReliabilityScore(booking.tasker_id, +5);
 
-      // -----------------------------
-      // 3️⃣ Thanh toán cho tasker (90%)
-      // -----------------------------
+      // 4. Thanh toán cho tasker (có tính quantity)
+      const safeQuantity = (booking.quantity && booking.quantity > 0) ? booking.quantity : 1;
       const rawAmount = booking.final_price && booking.final_price > 0
         ? booking.final_price
         : booking.expected_price;
 
-      const payoutAmount = Math.round(rawAmount * 0.9);
+      const payoutAmount = Math.round(rawAmount * safeQuantity * 0.9);
 
-      console.log(`💰 Tasker ${booking.tasker_id} nhận: ${payoutAmount}`);
+      console.log(`💰 [customerConfirmComplete] Payout: ${payoutAmount} (Rate: ${rawAmount}, Qty: ${safeQuantity})`);
 
       await executeQuery(
         `INSERT INTO WalletTransactions 
-        (user_id, amount, type, purpose, related_id, note, created_at)
-      VALUES 
-        (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
-        N'Thanh toán cho tasker sau khi khách xác nhận', SYSUTCDATETIME())`,
+          (user_id, amount, type, purpose, related_id, note, created_at)
+         VALUES 
+          (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
+           N'Thanh toán cho tasker (Đơn giá: ' + CAST(@raw as nvarchar) + N' x SL: ' + CAST(@qty as nvarchar) + N')', SYSUTCDATETIME())`,
         {
           user_id: booking.tasker_id,
           amount: payoutAmount,
-          booking_id: bookingId
+          booking_id: bookingId,
+          raw: rawAmount,
+          qty: safeQuantity
         }
       );
 
-      // -----------------------------
-      // 4️⃣ +10 loyalty points cho customer
-      // -----------------------------
-      console.log(`🎁 +10 điểm thưởng cho customer ${customerId}`);
-      await executeQuery(
-        `UPDATE Users SET points = points + 10 WHERE user_id = @param1`,
-        [customerId]
-      );
+      // 5. Cộng điểm cho khách
+      await executeQuery(`UPDATE Users SET points = points + 10 WHERE user_id = @param1`, [customerId]);
 
-      // -----------------------------
-      // 5️⃣ Gửi notification
-      // -----------------------------
+      // 6. Gửi thông báo
       try {
         const io = req.app.get("io");
-        console.log("[customerConfirmComplete] Sending socket event completed");
-
         await notifyBookingEvent(io, {
           action: "completed",
           booking_id: bookingId,
@@ -2349,159 +2359,15 @@ static async getTaskerEarningsSeries(req, res) {
         console.warn("[customerConfirmComplete] Socket warn:", e?.message);
       }
 
-      console.log("[customerConfirmComplete] DONE");
-      console.log("==============================================");
-
       return res.json({
         success: true,
         message: "Bạn đã xác nhận hoàn thành công việc",
-        payout: payoutAmount,
-        score: "+5 tasker",
-        customerPoints: "+10 points"
+        payout: payoutAmount
       });
 
     } catch (err) {
       console.error("[customerConfirmComplete] ERROR:", err);
-      return res.status(500).json({
-        success: false,
-        message: "Lỗi server khi xác nhận hoàn thành",
-        error: err.message
-      });
-    }
-  }
-
-
-  static async customerConfirmComplete(req, res) {
-    console.log("==============================================");
-    console.log("[Booking][customerConfirmComplete] START");
-
-    const bookingId = parseInt(req.params.id, 10);
-    const customerId = req.user?.userId;
-
-    console.log("[customerConfirmComplete] bookingId:", bookingId);
-    console.log("[customerConfirmComplete] customerId:", customerId);
-
-    try {
-      // Kiểm tra input
-      if (!bookingId || !customerId) {
-        return res.status(400).json({ success: false, message: "Thiếu bookingId hoặc customerId" });
-      }
-
-      // Lấy booking
-      const bookingRes = await executeQuery(
-        `SELECT booking_id, customer_id, tasker_id, expected_price, final_price 
-       FROM Bookings WHERE booking_id = @param1`,
-        [bookingId]
-      );
-      const booking = bookingRes.recordset?.[0];
-
-      if (!booking) {
-        return res.status(404).json({ success: false, message: "Booking không tồn tại" });
-      }
-
-      // Kiểm tra booking có phải của customer không
-      if (String(booking.customer_id) !== String(customerId)) {
-        return res.status(403).json({
-          success: false,
-          message: "Bạn không có quyền xác nhận đơn này"
-        });
-      }
-
-      // Kiểm tra đã hoàn thành chưa
-      const statusRes = await executeQuery(
-        `SELECT status FROM Bookings WHERE booking_id = @param1`,
-        [bookingId]
-      );
-
-      const currentStatus = statusRes.recordset?.[0]?.status;
-
-      if (currentStatus === "Hoàn thành") {
-        return res.json({ success: true, message: "Đơn đã ở trạng thái hoàn thành" });
-      }
-
-      // -----------------------------
-      // 1️⃣ Cập nhật trạng thái booking
-      // -----------------------------
-      console.log("[customerConfirmComplete] Updating status to Hoàn thành");
-      await executeQuery(
-        `UPDATE Bookings SET status = N'Hoàn thành' WHERE booking_id = @param1`,
-        [bookingId]
-      );
-
-      // -----------------------------
-      // 2️⃣ Cộng +5 uy tín cho tasker
-      // -----------------------------
-      console.log(`🎉 +5 uy tín cho tasker ${booking.tasker_id}`);
-      await updateReliabilityScore(booking.tasker_id, +5);
-
-      // -----------------------------
-      // 3️⃣ Thanh toán cho tasker (90%)
-      // -----------------------------
-      const rawAmount = booking.final_price && booking.final_price > 0
-        ? booking.final_price
-        : booking.expected_price;
-
-      const payoutAmount = Math.round(rawAmount * 0.9);
-
-      console.log(`💰 Tasker ${booking.tasker_id} nhận: ${payoutAmount}`);
-
-      await executeQuery(
-        `INSERT INTO WalletTransactions 
-        (user_id, amount, type, purpose, related_id, note, created_at)
-      VALUES 
-        (@user_id, @amount, 'credit', 'tasker_payout', @booking_id, 
-        N'Thanh toán cho tasker sau khi khách xác nhận', SYSUTCDATETIME())`,
-        {
-          user_id: booking.tasker_id,
-          amount: payoutAmount,
-          booking_id: bookingId
-        }
-      );
-
-      // -----------------------------
-      // 4️⃣ +10 loyalty points cho customer
-      // -----------------------------
-      console.log(`🎁 +10 điểm thưởng cho customer ${customerId}`);
-      await executeQuery(
-        `UPDATE Users SET points = points + 10 WHERE user_id = @param1`,
-        [customerId]
-      );
-
-      // -----------------------------
-      // 5️⃣ Gửi notification
-      // -----------------------------
-      try {
-        const io = req.app.get("io");
-        console.log("[customerConfirmComplete] Sending socket event completed");
-
-        await notifyBookingEvent(io, {
-          action: "completed",
-          booking_id: bookingId,
-          customer_id: booking.customer_id,
-          tasker_id: booking.tasker_id
-        });
-      } catch (e) {
-        console.warn("[customerConfirmComplete] Socket warn:", e?.message);
-      }
-
-      console.log("[customerConfirmComplete] DONE");
-      console.log("==============================================");
-
-      return res.json({
-        success: true,
-        message: "Bạn đã xác nhận hoàn thành công việc",
-        payout: payoutAmount,
-        score: "+5 tasker",
-        customerPoints: "+10 points"
-      });
-
-    } catch (err) {
-      console.error("[customerConfirmComplete] ERROR:", err);
-      return res.status(500).json({
-        success: false,
-        message: "Lỗi server khi xác nhận hoàn thành",
-        error: err.message
-      });
+      return res.status(500).json({ success: false, message: "Lỗi server", error: err.message });
     }
   }
 
@@ -2573,18 +2439,20 @@ static async getTaskerEarningsSeries(req, res) {
           await executeQuery(
             `
               DECLARE @NewID INT;
-              SELECT @NewID = ISNULL(MAX(contract_id), 0) + 1 FROM Contracts;
-              
+
               INSERT INTO Contracts (
-                  contract_id, booking_id, customer_id, tasker_id, 
+                  booking_id, customer_id, tasker_id, 
                   terms, customer_signature_url, start_date, end_date, 
                   status, created_at, signed_at
               )
               VALUES (
-                  @NewID, @bookingId, @customerId, @taskerId,
-                  N'Điều khoản dịch vụ tiêu chuẩn (Tự động tạo)', @signatureUrl, @startDate, @endDate,
+                  @bookingId, @customerId, @taskerId,
+                  N'Điều khoản dịch vụ tiêu chuẩn (Tự động tạo)', 
+                  @signatureUrl, @startDate, @endDate,
                   N'Đã ký', GETDATE(), GETDATE()
               );
+
+              SET @NewID = SCOPE_IDENTITY();
             `,
             {
               bookingId,
@@ -2710,13 +2578,13 @@ module.exports = {
   customerConfirmComplete: BookingController.customerConfirmComplete,
   updateStatusSOS: BookingController.updateStatusSOS,
   getTaskerStats: BookingController.getTaskerStats
-  ,getTaskerEarningsSeries: BookingController.getTaskerEarningsSeries
-  ,getTaskerBookingsMonthly: BookingController.getTaskerBookingsMonthly
-  ,getTaskerSuccessCancel: BookingController.getTaskerSuccessCancel
-  ,getTaskerUpcoming: BookingController.getTaskerUpcoming
-  ,getTaskerOverdue: BookingController.getTaskerOverdue
-  ,getTaskerRecentReviews: BookingController.getTaskerRecentReviews
-  ,getTaskerByService: BookingController.getTaskerByService,
+  , getTaskerEarningsSeries: BookingController.getTaskerEarningsSeries
+  , getTaskerBookingsMonthly: BookingController.getTaskerBookingsMonthly
+  , getTaskerSuccessCancel: BookingController.getTaskerSuccessCancel
+  , getTaskerUpcoming: BookingController.getTaskerUpcoming
+  , getTaskerOverdue: BookingController.getTaskerOverdue
+  , getTaskerRecentReviews: BookingController.getTaskerRecentReviews
+  , getTaskerByService: BookingController.getTaskerByService,
   signContract: BookingController.signContract,
   getBookingSessions: BookingController.getBookingSessions, // Export the new function
 };
