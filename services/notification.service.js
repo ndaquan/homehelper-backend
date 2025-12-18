@@ -21,7 +21,8 @@ async function notify(io, { user_id, title, content, type = 'system', data = nul
     payment: 'Payment',
     message: 'Message',
     system: 'System',
-    sos: 'Booking' // store as Booking, FE can use data.is_sos to render
+    sos: 'Booking', // store as Booking, FE can use data.is_sos to render
+    rating: 'rating' // explicit rating type for DB
   };
   const dbType = dbTypeMap[normType] || 'System';
   const notification = await Notification.create({
@@ -57,6 +58,39 @@ async function fetchUserNames({ customer_id, tasker_id }) {
     customer_name: customer_id ? map.get(String(customer_id)) : undefined,
     tasker_name: tasker_id ? map.get(String(tasker_id)) : undefined,
   };
+}
+
+// Rating notifications (customer rates tasker)
+async function notifyRatingEvent(io, { booking_id, reviewer_id, reviewee_id, rating, comment }) {
+  try {
+    const { customer_name, tasker_name } = await fetchUserNames({ customer_id: reviewer_id, tasker_id: reviewee_id });
+    const title = 'Bạn vừa nhận một đánh giá';
+    const content = `${customer_name || 'Khách hàng'} đã đánh giá ${Number(rating)}★ cho đơn #${booking_id}.`;
+    const data = {
+      booking_id,
+      reviewer_id,
+      reviewee_id,
+      rating: Number(rating),
+      comment,
+      url: `${CLIENT_BASE_URL}/ratings`
+    };
+    return notify(io, {
+      user_id: reviewee_id,
+      type: 'rating',
+      title,
+      content,
+      data
+    });
+  } catch (e) {
+    // Fall back: send minimal payload
+    return notify(io, {
+      user_id: reviewee_id,
+      type: 'rating',
+      title: 'Bạn vừa nhận một đánh giá',
+      content: `Khách hàng đã đánh giá ${Number(rating)}★ cho đơn #${booking_id}.`,
+      data: { booking_id, reviewer_id, reviewee_id, rating: Number(rating), comment }
+    });
+  }
 }
 
 // Booking event notifications
@@ -102,7 +136,7 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         type: 'booking',
         title: 'Công việc đã hoàn thành',
         content: `${tasker_name || 'Tasker'} đã hoàn thành đơn #${booking_id}. Vui lòng kiểm tra và thanh toán nếu còn thiếu.`,
-        data: baseData
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/customer/booking/${booking_id}` }
       });
     case 'paid':
       return notify(io, {
@@ -294,5 +328,6 @@ module.exports = {
   notifyBookingEvent,
   notifySosRequestToTaskers,
   notifyQuoteEvent,
+  notifyRatingEvent,
   notifyWithdrawalEvent,
 };

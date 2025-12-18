@@ -3,6 +3,7 @@ const Booking = require("../models/Booking");
 const User = require("../models/User");
 const { get } = require("../routes/ratings");
 const { executeQuery } = require("../config/database");
+const { notifyRatingEvent} = require("../services/notification.service");
 
 const getRatingsByTasker = async (req, res) => {
   try {
@@ -172,6 +173,22 @@ const addRatingByBooking = async (req, res) => {
       rating,
       comment,
     });
+
+    // 6. Gửi thông báo tới tasker được đánh giá
+    try {
+      const io = req.app.get('io');
+      if (io) {
+        await notifyRatingEvent(io, {
+          booking_id,
+          reviewer_id,
+          reviewee_id: booking.tasker_id,
+          rating,
+          comment
+        });
+      }
+    } catch (e) {
+      console.warn('[Rating][notifyRatingEvent] skipped:', e?.message || e);
+    }
 
     return res.status(200).json({
       success: true,
