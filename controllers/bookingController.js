@@ -645,7 +645,6 @@ class BookingController {
         const map = {
           'Đã chấp nhận': 'accepted',
           'Đang tiến hành': 'started',
-          'Hoàn thành': 'completed',
         };
         const action = map[status];
         if (action && booking) {
@@ -2202,6 +2201,24 @@ static async getTaskerEarningsSeries(req, res) {
           { bid: bookingId }
         );
         console.log("🎉 All sessions done! Booking status -> Chờ xác nhận");
+
+        // 🔔 Notify customer that tasker marked job as completed
+        try {
+          const io = req.app.get('io');
+          const infoRes = await executeQuery(
+            `SELECT customer_id, tasker_id FROM Bookings WHERE booking_id = @param1`,
+            [bookingId]
+          );
+          const info = infoRes.recordset?.[0] || {};
+          await notifyBookingEvent(io, {
+            action: 'completed',
+            booking_id: Number(bookingId),
+            customer_id: info.customer_id,
+            tasker_id: info.tasker_id,
+          });
+        } catch (notifyErr) {
+          console.warn('[completeJob] notify completed skipped:', notifyErr?.message || notifyErr);
+        }
       }
 
       return res.status(200).json({

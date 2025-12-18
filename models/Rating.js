@@ -151,6 +151,7 @@ class Rating {
         r.status, 
         r.created_at,
         u.name AS reviewer_name,
+        u.avatar_url AS reviewer_avatar,
         uu.name AS reviewee_name,
         s.name AS service_name
       FROM Ratings r

@@ -1,9 +1,10 @@
 const { executeQuery, getPool } = require('../config/database');
+const ImageEncryption = require('../utils/imageEncryption');
 
 const Quote = {
   getQuotesByPostId: async (postId) => {
     const query = `
-      SELECT q.quote_id, q.post_id, q.tasker_id, u.name AS tasker_name, q.variant_id, sv.variant_name, q.proposed_price, q.proposal, q.status, q.sent_at
+      SELECT q.quote_id, q.post_id, q.tasker_id, u.name AS tasker_name, u.avatar_url AS tasker_avatar, q.variant_id, sv.variant_name, q.proposed_price, q.proposal, q.status, q.sent_at
       FROM Quotes q
       INNER JOIN Users u ON q.tasker_id = u.user_id
       INNER JOIN ServiceVariants sv ON q.variant_id = sv.variant_id
@@ -11,7 +12,11 @@ const Quote = {
       ORDER BY q.sent_at DESC
     `;
     const result = await executeQuery(query, [postId]);
-    return result.recordset;
+    return result.recordset.map(row => ({
+      ...row,
+      tasker_avatar: ImageEncryption.decrypt(row.tasker_avatar)
+    }));
+
   },
 
   checkPostOwnership: async (postId, userId) => {

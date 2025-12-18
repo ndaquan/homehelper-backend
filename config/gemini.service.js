@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-// Model gốc - đang hoạt động với các dịch vụ khác
+const GEMINI_API_KEY1 = process.env.GEMINI_API_KEY1;
 const GEMINI_API_URL =
   "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent";
 
@@ -226,7 +226,7 @@ async function optimizeImage(imagePath) {
 
 // Call Gemini with retry/backoff to mitigate transient 503s
 async function callGeminiGenerateContent(body) {
-  const url = `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`;
+  const url = `${GEMINI_API_URL}?key=${GEMINI_API_KEY1}`;
   const headers = { "Content-Type": "application/json" };
   const maxAttempts = 3;
   let attempt = 0;
@@ -368,7 +368,7 @@ function normalizeDate(raw) {
 }
 
 async function extractCertificateFromUrl(certUrl) {
-  if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
+  if (!GEMINI_API_KEY1) throw new Error("Missing Gemini API key");
   const local = await downloadToTemp(certUrl);
   let imagePath = local;
   if (/\.pdf$/i.test(local)) {
