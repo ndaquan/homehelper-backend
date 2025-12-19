@@ -119,7 +119,7 @@ exports.approveEvidence = async (req, res) => {
     /// Update Evidence
     await executeQuery(`
       UPDATE EvidenceReview
-      SET status = N'approved', admin_id=@admin_id, reviewed_at=GETDATE()
+      SET status = N'approved', admin_id=@admin_id, reviewed_at=SYSUTCDATETIME()
       WHERE id=@id
     `, { id, admin_id });
 
@@ -134,7 +134,7 @@ exports.approveEvidence = async (req, res) => {
     await executeQuery(`
       INSERT INTO WalletTransactions
       (user_id, amount, type, purpose, related_id, note, created_at)
-      VALUES (@uid, @amount, N'compensation', N'evidence_approved', @bid, @note, GETDATE())
+      VALUES (@uid, @amount, N'compensation', N'evidence_approved', @bid, @note, SYSUTCDATETIME())
     `, {
       uid: booking.tasker_id,
       amount: compensationAmount,
@@ -197,7 +197,7 @@ exports.rejectEvidence = async (req, res) => {
     // Update evidence
     await executeQuery(`
       UPDATE EvidenceReview
-      SET status = N'rejected', admin_id=@admin_id, reviewed_at=GETDATE()
+      SET status = N'rejected', admin_id=@admin_id, reviewed_at=SYSUTCDATETIME()
       WHERE id=@id
     `, { id, admin_id });
 
@@ -229,7 +229,7 @@ exports.rejectEvidence = async (req, res) => {
     await executeQuery(`
       INSERT INTO WalletTransactions 
       (user_id, amount, type, purpose, related_id, note, created_at)
-      VALUES (@uid, @amount, N'refund', N'evidence_rejected', @bid, @note, GETDATE())
+      VALUES (@uid, @amount, N'refund', N'evidence_rejected', @bid, @note, SYSUTCDATETIME())
     `, {
       uid: booking.customer_id,
       amount: refundAmount,
@@ -246,7 +246,7 @@ exports.rejectEvidence = async (req, res) => {
         INSERT INTO Vouchers
         (user_id, type, discount, used, created_at, source_booking_id)
         VALUES
-        (@uid, 'compensation', 0.1, 0, GETDATE(), @bid)
+        (@uid, 'compensation', 0.1, 0, SYSUTCDATETIME(), @bid)
       `, {
         uid: booking.customer_id,
         bid: booking.booking_id

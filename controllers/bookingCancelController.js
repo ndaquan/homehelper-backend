@@ -61,7 +61,7 @@ class BookingCancelController {
                 if (refundAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                        VALUES (@param1, @param2, N'refund', N'booking_cancel', @param3, @param4, GETDATE())`,
+                        VALUES (@param1, @param2, N'refund', N'booking_cancel', @param3, @param4, SYSUTCDATETIME())`,
                         [booking.customer_id, refundAmount, bookingId, `[${policy.ruleCode}] ${policy.note}`]
                     );
                 }
@@ -70,7 +70,7 @@ class BookingCancelController {
                 if (compensationAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                        VALUES (@param1, @param2, N'compensation', N'booking_cancel', @param3, @param4, GETDATE())`,
+                        VALUES (@param1, @param2, N'compensation', N'booking_cancel', @param3, @param4, SYSUTCDATETIME())`,
                         [booking.tasker_id, compensationAmount, bookingId, `[${policy.ruleCode}] ${policy.note}`]
                     );
                 }
@@ -80,7 +80,7 @@ class BookingCancelController {
             if (cancelledBy === "system" || cancelledBy === "no_show") {
                 await executeQuery(
                     `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                    VALUES (@param1, 0, N'system', @param2, @param3, @param4, GETDATE())`,
+                    VALUES (@param1, 0, N'system', @param2, @param3, @param4, SYSUTCDATETIME())`,
                     [
                         booking.customer_id,
                         cancelledBy === "system" ? "system_cancel" : "no_show",
@@ -108,7 +108,7 @@ class BookingCancelController {
                 if (refundAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                        VALUES (@param1, @param2, N'refund', N'tasker_cancel', @param3, N'Tasker hủy đơn', GETDATE())`,
+                        VALUES (@param1, @param2, N'refund', N'tasker_cancel', @param3, N'Tasker hủy đơn', SYSUTCDATETIME())`,
                         [booking.customer_id, refundAmount, bookingId]
                     );
                 }
@@ -123,7 +123,7 @@ class BookingCancelController {
                         INSERT INTO Vouchers
                         (user_id, type, discount, used, created_at, source_booking_id)
                         VALUES
-                        (@uid, 'compensation', 0.1, 0, GETDATE(), @bid)
+                        (@uid, 'compensation', 0.1, 0, SYSUTCDATETIME(), @bid)
                     `, {
                         uid: booking.customer_id,
                         bid: booking.booking_id

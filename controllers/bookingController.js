@@ -46,7 +46,7 @@ class BookingController {
         )
         VALUES (
           @customer_id, @tasker_id, @service_id, @variant_id,
-          GETDATE(), @start_time, @end_time, @location,
+          SYSUTCDATETIME(), @start_time, @end_time, @location,
           N'Chờ xử lý', @expected_price, @quantity, @total_sessions, @type, @description
         );
 
@@ -1051,7 +1051,7 @@ class BookingController {
         ) t
         WHERE b.type = N'SOS'
           AND b.status = N'Chờ xử lý'
-          AND b.sos_expires_at > GETDATE()
+          AND b.sos_expires_at > SYSUTCDATETIME()
           AND EXISTS (
             SELECT 1 FROM TaskerServiceVariants tsv 
             JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
@@ -1126,8 +1126,8 @@ class BookingController {
          FROM Bookings
          WHERE tasker_id = @taskerId
            AND (status = N'Hoàn thành' OR status = 'Completed')
-           AND YEAR(ISNULL(end_time, booking_time)) = YEAR(GETDATE())
-           AND MONTH(ISNULL(end_time, booking_time)) = MONTH(GETDATE())`,
+           AND YEAR(ISNULL(end_time, booking_time)) = YEAR(SYSUTCDATETIME())
+           AND MONTH(ISNULL(end_time, booking_time)) = MONTH(SYSUTCDATETIME())`,
         { taskerId }
       );
       const completed_this_month = completedMonthRes.recordset?.[0]?.count || 0;
@@ -1148,13 +1148,25 @@ class BookingController {
 
       const earningsMonthRes = await executeQuery(
         `
-      SELECT
-        ISNULL(SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9), 0) AS total
-      FROM Bookings
-      WHERE tasker_id = @taskerId
-        AND status IN (N'Hoàn thành','Completed')
-        AND YEAR(end_time) = YEAR(GETDATE())
-        AND MONTH(end_time) = MONTH(GETDATE())
+        SELECT
+          ISNULL(
+            SUM(
+              (
+                CASE 
+                  WHEN final_price IS NULL OR final_price = 0 
+                    THEN expected_price
+                  ELSE final_price
+                END
+              ) 
+              * ISNULL(quantity, 1) 
+              * 0.9
+            ), 
+          0) AS total
+        FROM Bookings
+        WHERE tasker_id = @taskerId
+          AND status IN (N'Hoàn thành','Completed')
+          AND YEAR(end_time) = YEAR(SYSUTCDATETIME())
+          AND MONTH(end_time) = MONTH(SYSUTCDATETIME())
       `,
         { taskerId }
       );
@@ -1215,12 +1227,12 @@ class BookingController {
       // Time column to use
       const timeCol = 'ISNULL(end_time, start_time)';
 
-      let dateFilter = `${timeCol} >= DATEADD(month, -@periods, GETDATE())`;
+      let dateFilter = `${timeCol} >= DATEADD(month, -@periods, SYSUTCDATETIME())`;
       if (granularity === 'week') {
-        dateFilter = `${timeCol} >= DATEADD(week, -@periods, GETDATE())`;
+        dateFilter = `${timeCol} >= DATEADD(week, -@periods, SYSUTCDATETIME())`;
       }
       if (granularity === 'quarter') {
-        dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, GETDATE())`;
+        dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, SYSUTCDATETIME())`;
       }
 
       let sql = '';
@@ -1313,7 +1325,7 @@ class BookingController {
                  status
           FROM Bookings
           WHERE tasker_id = @taskerId
-            AND ISNULL(start_time, booking_time) >= DATEADD(month, -@months, GETDATE())
+            AND ISNULL(start_time, booking_time) >= DATEADD(month, -@months, SYSUTCDATETIME())
         )
         SELECT CONCAT(y,'-',RIGHT('0'+CAST(m as varchar(2)),2)) AS label,
                SUM(CASE WHEN status IN (N'Hoàn thành','Completed') THEN 1 ELSE 0 END) AS completed,
@@ -1351,7 +1363,7 @@ class BookingController {
           SUM(CASE WHEN status IN (N'Hủy','Cancelled') THEN 1 ELSE 0 END) AS cancelled
         FROM Bookings
         WHERE tasker_id = @taskerId
-          AND ISNULL(start_time, booking_time) >= DATEADD(month, -@months, GETDATE())
+          AND ISNULL(start_time, booking_time) >= DATEADD(month, -@months, SYSUTCDATETIME())
       `;
 
       const r = await executeQuery(sql, { taskerId, months });
@@ -1378,7 +1390,7 @@ class BookingController {
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
         WHERE b.tasker_id = @taskerId
           AND (
-            (b.status IN (N'Đã chấp nhận','Accepted') AND b.start_time BETWEEN GETDATE() AND DATEADD(day, @days, GETDATE()))
+            (b.status IN (N'Đã chấp nhận','Accepted') AND b.start_time BETWEEN SYSUTCDATETIME() AND DATEADD(day, @days, SYSUTCDATETIME()))
             OR (b.status IN (N'Đang tiến hành','In Progress'))
           )
         ORDER BY ISNULL(b.start_time, b.booking_time) ASC
@@ -1406,7 +1418,7 @@ class BookingController {
         LEFT JOIN ServiceVariants sv ON b.variant_id = sv.variant_id
         WHERE b.tasker_id = @taskerId
           AND b.end_time IS NOT NULL
-          AND b.end_time < GETDATE()
+          AND b.end_time < SYSUTCDATETIME()
           AND b.status NOT IN (N'Hoàn thành','Completed', N'Hủy','Cancelled')
         ORDER BY b.end_time DESC
       `;
@@ -1454,14 +1466,14 @@ class BookingController {
                  b.booking_time
           FROM Bookings b
           WHERE b.tasker_id = @taskerId
-            AND b.booking_time >= DATEADD(month, -@months, GETDATE())
+            AND b.booking_time >= DATEADD(month, -@months, SYSUTCDATETIME())
         ),
         W AS (
           SELECT related_id AS booking_id, SUM(amount) AS earnings
           FROM WalletTransactions
           WHERE user_id = @taskerId
             AND (type = 'credit' OR type = 'payout')
-            AND created_at >= DATEADD(month, -@months, GETDATE())
+            AND created_at >= DATEADD(month, -@months, SYSUTCDATETIME())
           GROUP BY related_id
         )
         SELECT s.service_id, s.name AS service_name,
@@ -1941,7 +1953,7 @@ class BookingController {
             `INSERT INTO WalletTransactions 
            (user_id, amount, type, purpose, related_id, note, created_at)
            VALUES (@param1, @param2, N'refund', N'complaint_approved', @param3, 
-           N'Hoàn tiền khiếu nại (Theo số tiền thực trả: ' + CAST(@paid as nvarchar) + N')', GETDATE())`,
+           N'Hoàn tiền khiếu nại (Theo số tiền thực trả: ' + CAST(@paid as nvarchar) + N')', SYSUTCDATETIME())`,
             {
               param1: booking.customer_id,
               param2: refundAmount,
@@ -1955,7 +1967,7 @@ class BookingController {
         await executeQuery(
           `INSERT INTO Vouchers 
         (user_id, type, discount, used, created_at, source_booking_id)
-        VALUES (@uid, 'compensation', 0.1, 0, GETDATE(), @bid)`,
+        VALUES (@uid, 'compensation', 0.1, 0, SYSUTCDATETIME(), @bid)`,
           { uid: booking.customer_id, bid: bookingId }
         );
 
@@ -1997,7 +2009,7 @@ class BookingController {
             `INSERT INTO WalletTransactions 
           (user_id, amount, type, purpose, related_id, note, created_at)
           VALUES (@param1, @param2, N'credit', N'complaint_rejected', @param3, 
-          N'Thanh toán sau khiếu nại bị bác bỏ (Theo số tiền thực trả: ' + CAST(@paid as nvarchar) + N')', GETDATE())`,
+          N'Thanh toán sau khiếu nại bị bác bỏ (Theo số tiền thực trả: ' + CAST(@paid as nvarchar) + N')', SYSUTCDATETIME())`,
             {
               param1: booking.tasker_id,
               param2: payout,
@@ -2126,7 +2138,7 @@ class BookingController {
           // Update existing record with session_id
           await executeQuery(
             `UPDATE TaskPhotos 
-           SET session_id = @tid, photo_type = @type, uploaded_at = GETUTCDATE()
+           SET session_id = @tid, photo_type = @type, uploaded_at = SYSUTCDATETIME()
            WHERE photo_url = @url AND booking_id = @bid`,
             {
               tid: specificTaskId,
@@ -2139,7 +2151,7 @@ class BookingController {
           // Insert new record
           await executeQuery(
             `INSERT INTO TaskPhotos (booking_id, photo_url, photo_type, uploaded_by, uploaded_at, session_id)
-            VALUES (@bid, @url, @type, @uid, GETUTCDATE(), @tid)`,
+            VALUES (@bid, @url, @type, @uid, SYSUTCDATETIME(), @tid)`,
             {
               bid: bookingId,
               url: url,
@@ -2176,7 +2188,7 @@ class BookingController {
              status = N'Hoàn thành',
              completed = 1,
              checkin_time = COALESCE(@checkIn, checkin_time),
-             checkout_time = COALESCE(@checkOut, GETUTCDATE())
+             checkout_time = COALESCE(@checkOut, SYSUTCDATETIME())
            WHERE task_id = @tid`,
           {
             timers: JSON.stringify(checklist_timers || {}),
@@ -2194,7 +2206,7 @@ class BookingController {
              status = N'Hoàn thành',
              completed = 1,
              checkin_time = COALESCE(@checkIn, checkin_time),
-             checkout_time = COALESCE(@checkOut, GETUTCDATE())
+             checkout_time = COALESCE(@checkOut, SYSUTCDATETIME())
            WHERE booking_id = @bid`,
           {
             timers: JSON.stringify(checklist_timers || {}),
@@ -2229,7 +2241,7 @@ class BookingController {
       if (allDone) {
         // Update Booking Status to "Chờ xác nhận"
         await executeQuery(
-          "UPDATE Bookings SET status = N'Chờ xác nhận', end_time = GETUTCDATE() WHERE booking_id = @bid",
+          "UPDATE Bookings SET status = N'Chờ xác nhận', end_time = SYSUTCDATETIME() WHERE booking_id = @bid",
           { bid: bookingId }
         );
         console.log("🎉 All sessions done! Booking status -> Chờ xác nhận");
@@ -2424,7 +2436,7 @@ class BookingController {
 
         const updateRes = await executeQuery(
           `UPDATE Contracts 
-             SET customer_signature_url = @url, signed_at = GETDATE(), status = N'Đã ký'
+             SET customer_signature_url = @url, signed_at = SYSUTCDATETIME(), status = N'Đã ký'
              WHERE booking_id = @id`,
           { url: signatureUrl, id: bookingId }
         );
@@ -2449,7 +2461,7 @@ class BookingController {
                   @bookingId, @customerId, @taskerId,
                   N'Điều khoản dịch vụ tiêu chuẩn (Tự động tạo)', 
                   @signatureUrl, @startDate, @endDate,
-                  N'Đã ký', GETDATE(), GETDATE()
+                  N'Đã ký', SYSUTCDATETIME(), SYSUTCDATETIME()
               );
 
               SET @NewID = SCOPE_IDENTITY();

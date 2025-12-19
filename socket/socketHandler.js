@@ -307,15 +307,15 @@ class SocketHandler {
         OUTPUT INSERTED.booking_id AS inserted_id
         VALUES (
           @customer_id, NULL, @service_id, @variant_id,
-          GETDATE(), DATEADD(MINUTE, 20, GETDATE()),
+          SYSUTCDATETIME(), DATEADD(MINUTE, 20, SYSUTCDATETIME()),
             CASE
-              WHEN TRY_CAST(@duration_hours AS INT) IS NOT NULL AND TRY_CAST(@duration_hours AS INT) > 0 THEN DATEADD(HOUR, TRY_CAST(@duration_hours AS INT), DATEADD(MINUTE, 20, GETDATE()))
-              WHEN TRY_CAST(@duration_days AS INT) IS NOT NULL AND TRY_CAST(@duration_days AS INT) > 0 THEN DATEADD(DAY, TRY_CAST(@duration_days AS INT), DATEADD(MINUTE, 20, GETDATE()))
+              WHEN TRY_CAST(@duration_hours AS INT) IS NOT NULL AND TRY_CAST(@duration_hours AS INT) > 0 THEN DATEADD(HOUR, TRY_CAST(@duration_hours AS INT), DATEADD(MINUTE, 20, SYSUTCDATETIME()))
+              WHEN TRY_CAST(@duration_days AS INT) IS NOT NULL AND TRY_CAST(@duration_days AS INT) > 0 THEN DATEADD(DAY, TRY_CAST(@duration_days AS INT), DATEADD(MINUTE, 20, SYSUTCDATETIME()))
               ELSE NULL
             END,
           @location, N'Chờ xử lý',
           @base_price, 0, @type,
-          DATEADD(MINUTE, 10, GETDATE()), @expected_price, @total_sessions
+          DATEADD(MINUTE, 10, SYSUTCDATETIME()), @expected_price, @total_sessions
         )
       `, {
         customer_id: socket.userId,

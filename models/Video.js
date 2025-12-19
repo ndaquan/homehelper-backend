@@ -35,7 +35,7 @@ class Video {
         const query = `
     INSERT INTO VideoModerations 
     (video_id, is_safe, nudity_score, weapon_score, violence_score, offensive_score, raw_response, rejection_reason, moderated_at)
-    VALUES (@video_id, @is_safe, @nudity_score, @weapon_score, @violence_score, @offensive_score, @raw_response, @rejection_reason, GETDATE())
+    VALUES (@video_id, @is_safe, @nudity_score, @weapon_score, @violence_score, @offensive_score, @raw_response, @rejection_reason, SYSUTCDATETIME())
   `;
 
         try {
@@ -166,7 +166,7 @@ class Video {
     INSERT INTO Videos 
     (user_id, title, description, video_url, public_id, status, text_moderation_status, text_moderation_reason, uploaded_at)
     OUTPUT INSERTED.*
-    VALUES (@param1, @param2, @param3, @param4, @param5, 'Pending', @param6, @param7, GETDATE())
+    VALUES (@param1, @param2, @param3, @param4, @param5, 'Pending', @param6, @param7, SYSUTCDATETIME())
   `;
         try {
             const result = await executeQuery(query, [
@@ -216,7 +216,7 @@ class Video {
       description = @param3, 
       video_url = @param4, 
       public_id = @param5,
-      uploaded_at = GETDATE()
+      uploaded_at = SYSUTCDATETIME()
       OUTPUT INSERTED.video_id, INSERTED.user_id, INSERTED.title, INSERTED.description, INSERTED.video_url, INSERTED.public_id, INSERTED.uploaded_at, INSERTED.status
       WHERE video_id = @param1 AND user_id = @param6 AND status = 'Pending' AND is_deleted = 0
     `;

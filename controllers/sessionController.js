@@ -47,7 +47,7 @@ async function findOrCreateSession(bookingId, dayKey) {
   const rows = res.recordset || [];
   if (rows.length) return rows[0];
 
-  const insertSql = `INSERT INTO Sessions (booking_id, day_key, created_at, updated_at) VALUES (@bookingId, @dayKey, GETDATE(), GETDATE()); SELECT SCOPE_IDENTITY() as id;`;
+  const insertSql = `INSERT INTO Sessions (booking_id, day_key, created_at, updated_at) VALUES (@bookingId, @dayKey, SYSUTCDATETIME(), SYSUTCDATETIME()); SELECT SCOPE_IDENTITY() as id;`;
   const insertRes = await executeQuery(insertSql, { bookingId, dayKey });
   const id =
     insertRes &&
@@ -88,7 +88,7 @@ async function uploadSessionPhotos(req, res) {
         if (persistToDb) {
           await executeQuery(
             `INSERT INTO SessionPhotos (session_id, booking_id, [type], photo_url, storage_path, file_name, mime, size, ordinal, uploaded_by, uploaded_at, created_at, updated_at)
-             VALUES (@sessionId, @bookingId, @type, @photoUrl, @storagePath, @fileName, @mime, @size, @ordinal, @uploadedBy, GETDATE(), GETDATE(), GETDATE())`,
+             VALUES (@sessionId, @bookingId, @type, @photoUrl, @storagePath, @fileName, @mime, @size, @ordinal, @uploadedBy, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME())`,
             {
               sessionId: session.session_id,
               bookingId,
@@ -128,7 +128,7 @@ async function uploadSessionPhotos(req, res) {
         if (persistToDb) {
           await executeQuery(
             `INSERT INTO SessionPhotos (session_id, booking_id, [type], photo_url, storage_path, file_name, mime, size, ordinal, uploaded_by, uploaded_at, created_at, updated_at)
-             VALUES (@sessionId, @bookingId, @type, @photoUrl, @storagePath, @fileName, @mime, @size, @ordinal, @uploadedBy, GETDATE(), GETDATE(), GETDATE())`,
+             VALUES (@sessionId, @bookingId, @type, @photoUrl, @storagePath, @fileName, @mime, @size, @ordinal, @uploadedBy, SYSUTCDATETIME(), SYSUTCDATETIME(), SYSUTCDATETIME())`,
             {
               sessionId: session.session_id,
               bookingId,
@@ -229,7 +229,7 @@ async function updateSession(req, res) {
       }
       const newAccum = (session.accumulated_ms || 0) + add;
       await executeQuery(
-        `UPDATE Sessions SET done = 1, finished_at = GETDATE(), started_at = NULL, accumulated_ms = @acc WHERE session_id = @sessionId`,
+        `UPDATE Sessions SET done = 1, finished_at = SYSUTCDATETIME(), started_at = NULL, accumulated_ms = @acc WHERE session_id = @sessionId`,
         { acc: newAccum, sessionId: session.session_id }
       );
 
@@ -247,7 +247,7 @@ async function updateSession(req, res) {
 
     // Allow unmarking done (resume)
     await executeQuery(
-      `UPDATE Sessions SET done = 0, started_at = GETDATE(), finished_at = NULL WHERE session_id = @sessionId`,
+      `UPDATE Sessions SET done = 0, started_at = SYSUTCDATETIME(), finished_at = NULL WHERE session_id = @sessionId`,
       { sessionId: session.session_id }
     );
     return res.json({ success: true, session_id: session.session_id });

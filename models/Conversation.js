@@ -16,19 +16,19 @@ class Conversation {
 
           INSERT INTO Conversations (title, type, created_by, created_at, updated_at)
           OUTPUT INSERTED.conversation_id INTO @cid
-          VALUES (@param1, @param2, @param3, GETDATE(), GETDATE());
+          VALUES (@param1, @param2, @param3, SYSUTCDATETIME(), SYSUTCDATETIME());
 
           DECLARE @conversation_id INT;
           SELECT TOP 1 @conversation_id = conversation_id FROM @cid;
 
           -- Thêm người tạo vào participants
           INSERT INTO ConversationParticipants (conversation_id, user_id, role, joined_at)
-          VALUES (@conversation_id, @param3, 'admin', GETDATE());
+          VALUES (@conversation_id, @param3, 'admin', SYSUTCDATETIME());
 
           -- Thêm các participants khác
           ${participants.map((_, index) => `
             INSERT INTO ConversationParticipants (conversation_id, user_id, role, joined_at)
-            VALUES (@conversation_id, @param${index + 4}, 'member', GETDATE());
+            VALUES (@conversation_id, @param${index + 4}, 'member', SYSUTCDATETIME());
           `).join('')}
 
           SELECT @conversation_id AS conversation_id;
@@ -208,7 +208,7 @@ class Conversation {
     try {
       const query = `
         INSERT INTO ConversationParticipants (conversation_id, user_id, role, joined_at)
-        VALUES (@param1, @param2, @param3, GETDATE())
+        VALUES (@param1, @param2, @param3, SYSUTCDATETIME())
       `;
 
       await executeQuery(query, [conversationId, userId, role]);
@@ -224,7 +224,7 @@ class Conversation {
     try {
       const query = `
         UPDATE ConversationParticipants 
-        SET is_active = 0, left_at = GETDATE()
+        SET is_active = 0, left_at = SYSUTCDATETIME()
         WHERE conversation_id = @param1 AND user_id = @param2
       `;
 
@@ -241,7 +241,7 @@ class Conversation {
     try {
       const query = `
         UPDATE ConversationParticipants 
-        SET last_read_at = GETDATE()
+        SET last_read_at = SYSUTCDATETIME()
         WHERE conversation_id = @param1 AND user_id = @param2
       `;
 
@@ -273,7 +273,7 @@ class Conversation {
         throw new Error('Không có trường nào được cập nhật');
       }
 
-      updates.push('updated_at = GETDATE()');
+      updates.push('updated_at = SYSUTCDATETIME()');
       params.push(conversationId);
 
       const query = `
@@ -295,7 +295,7 @@ class Conversation {
     try {
       const query = `
         UPDATE Conversations 
-        SET is_active = 0, updated_at = GETDATE()
+        SET is_active = 0, updated_at = SYSUTCDATETIME()
         WHERE conversation_id = @param1
       `;
 

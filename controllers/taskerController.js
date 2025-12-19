@@ -281,7 +281,7 @@ exports.createPendingCertification = async (req, res) => {
       const insertQuery = `INSERT INTO TaskerCertifications (
         tasker_id, cert_public_id, service_id, variant_ids_json, status, created_at, cert_name, delivery_type, issued_by, issued_date, extracted_payload, ai_status, needs_review, parsed_cert_name, parsed_issued_by, parsed_issued_date, parsed_holder_name, parsed_grade_or_level, parsed_certificate_code, ai_detected_service, ai_confidence
       ) VALUES (
-        @param1, @param2, @param3, @param4, @param5, GETDATE(), @param6, @param7, @param8, @param9, @param10, @param11, @param12, @param13, @param14, @param15, @param16, @param17, @param18, @param19, @param20
+        @param1, @param2, @param3, @param4, @param5, SYSUTCDATETIME(), @param6, @param7, @param8, @param9, @param10, @param11, @param12, @param13, @param14, @param15, @param16, @param17, @param18, @param19, @param20
       )`;
       await executeQuery(insertQuery, [
         userId,
@@ -1013,7 +1013,7 @@ exports.upgradeToTasker = async (req, res) => {
     }
     // Simple TaskerApplications table check / create record (assuming table exists); if not, attempt create.
     try {
-      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), signature_url NVARCHAR(500), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
+      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), signature_url NVARCHAR(500), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT SYSUTCDATETIME(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
     } catch (tableErr) { console.warn('⚠️ Could not ensure TaskerApplications table:', tableErr.message); }
     // Prevent duplicate when there's already a Pending or Approved application
     const existingApp = await executeQuery("SELECT TOP 1 application_id, status FROM TaskerApplications WHERE user_id = @param1 AND status IN ('Pending','Approved') ORDER BY application_id DESC", [userId]);
@@ -1182,14 +1182,14 @@ exports.approveTaskerApplication = async (req, res) => {
       if (toApprove.length) {
         const placeholders = toApprove.map((_, i) => `@param${i + 2}`).join(',');
         try {
-          await executeQuery(`UPDATE TaskerCertifications SET verified_at = GETDATE(), verified_by = @param1, status = 'Approved', ai_status = CASE WHEN ai_status IS NULL OR ai_status = 'Snapshot' THEN 'Verified' ELSE ai_status END WHERE cert_id IN (${placeholders})`, [reviewerId, ...toApprove]);
+          await executeQuery(`UPDATE TaskerCertifications SET verified_at = SYSUTCDATETIME(), verified_by = @param1, status = 'Approved', ai_status = CASE WHEN ai_status IS NULL OR ai_status = 'Snapshot' THEN 'Verified' ELSE ai_status END WHERE cert_id IN (${placeholders})`, [reviewerId, ...toApprove]);
         } catch (verr) { console.warn('Mark approve failed', verr.message); }
       }
     }
     // 5. Persist video if any
     if (app.introduction_video && app.introduction_video.video_url) {
       try {
-        await executeQuery(`INSERT INTO Videos (user_id, title, description, video_url, public_id, likes, uploaded_at, is_deleted) VALUES (@param1,@param2,@param3,@param4,@param5,0,GETDATE(),0)`, [app.user_id, app.introduction_video.title || 'Giới thiệu', app.introduction_video.description || '', app.introduction_video.video_url, app.introduction_video.public_id || null]);
+        await executeQuery(`INSERT INTO Videos (user_id, title, description, video_url, public_id, likes, uploaded_at, is_deleted) VALUES (@param1,@param2,@param3,@param4,@param5,0,SYSUTCDATETIME(),0)`, [app.user_id, app.introduction_video.title || 'Giới thiệu', app.introduction_video.description || '', app.introduction_video.video_url, app.introduction_video.public_id || null]);
       } catch (ve) { console.warn('Persist video on approve failed', ve.message); }
     }
     // 6. Mark application approved
@@ -1276,7 +1276,7 @@ exports.getMyTaskerApplicationStatus = async (req, res) => {
     if (!userId) return res.status(401).json({ success: false, message: 'Unauthorized' });
     // Ensure table exists
     try {
-      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT GETDATE(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
+      await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT SYSUTCDATETIME(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
     } catch (_) { }
     const r = await executeQuery("SELECT TOP 1 application_id, status, created_at, reviewed_at, note FROM TaskerApplications WHERE user_id=@param1 ORDER BY application_id DESC", [userId]);
     if (process.env.NODE_ENV !== 'production') {
