@@ -29,7 +29,7 @@ class TaskerProfile {
     const tasker = result.recordset[0];
     console.log('🔍 Raw tasker from DB:', { ...tasker, avatar_url: tasker.avatar_url ? `[${tasker.avatar_url.length} chars]` : 'NULL' });
     tasker.name = tasker.user_name; // gán lại name từ Users
-    
+
     // Decrypt avatar_url if encrypted
     if (tasker.avatar_url) {
       console.log('🔓 Attempting to decrypt avatar_url...');
@@ -65,7 +65,7 @@ class TaskerProfile {
   // Cập nhật thông tin tasker profile
   static async update(id, data) {
     console.log('🔧 TaskerProfile.update called with:', { id, data: { ...data, avatar_url: data.avatar_url ? `[${data.avatar_url.length} chars]` : undefined } });
-    
+
     if (!id || isNaN(parseInt(id, 10))) {
       throw new Error("Tasker ID không hợp lệ");
     }
@@ -98,7 +98,7 @@ class TaskerProfile {
 
       if (userUpdates.length > 0) {
         userParams.push(taskerId);
-        const userQuery = `UPDATE Users SET ${userUpdates.join(', ')}, updated_at = GETDATE() WHERE user_id = @param${paramIdx}`;
+        const userQuery = `UPDATE Users SET ${userUpdates.join(', ')}, updated_at = SYSUTCDATETIME() WHERE user_id = @param${paramIdx}`;
         console.log('🔵 SQL Update Users:', userQuery);
         console.log('🔵 SQL Params:', userParams.map((p, i) => typeof p === 'string' && p.length > 50 ? `[${p.length} chars]` : p));
         const updateResult = await executeQuery(userQuery, userParams);

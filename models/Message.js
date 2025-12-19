@@ -4,20 +4,20 @@ class Message {
   // Tạo tin nhắn mới
   static async create(messageData) {
     try {
-  const { conversation_id, sender_id, content, message_type = 'text', file_url, file_name, file_size } = messageData;
-      
+      const { conversation_id, sender_id, content, message_type = 'text', file_url, file_name, file_size } = messageData;
+
       const query = `
         INSERT INTO Messages (conversation_id, sender_id, content, message_type, file_url, file_name, file_size, created_at, updated_at)
-        VALUES (@param1, @param2, @param3, @param4, @param5, @param6, @param7, GETDATE(), GETDATE());
+        VALUES (@param1, @param2, @param3, @param4, @param5, @param6, @param7, SYSUTCDATETIME(), SYSUTCDATETIME());
         
         SELECT SCOPE_IDENTITY() AS message_id;
       `;
-      
+
       const params = [conversation_id, sender_id, content, message_type, file_url, file_name, file_size];
       const result = await executeQuery(query, params);
-      
+
       const messageId = result.recordset[0].message_id;
-      
+
       return await this.findById(messageId);
     } catch (error) {
       throw new Error(`Lỗi tạo tin nhắn: ${error.message}`);
@@ -36,13 +36,13 @@ class Message {
         LEFT JOIN Users u ON m.sender_id = u.user_id
         WHERE m.message_id = @param1 AND m.is_deleted = 0
       `;
-      
+
       const result = await executeQuery(query, [messageId]);
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi tìm tin nhắn: ${error.message}`);
@@ -114,13 +114,13 @@ class Message {
         WHERE m.conversation_id = @param1 AND m.is_deleted = 0
         ORDER BY m.created_at DESC
       `;
-      
+
       const result = await executeQuery(query, [conversationId]);
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
     } catch (error) {
       throw new Error(`Lỗi lấy tin nhắn mới nhất: ${error.message}`);
@@ -131,7 +131,7 @@ class Message {
   static async search(conversationId, searchTerm, page = 1, limit = 20) {
     try {
       const offset = (page - 1) * limit;
-      
+
       const query = `
         SELECT m.*, 
                u.name as sender_name,
@@ -151,12 +151,12 @@ class Message {
           AND m.is_deleted = 0
           AND m.content LIKE '%' + @param2 + '%';
       `;
-      
-  const result = await executeQuery(query, [conversationId, searchTerm]);
-      
+
+      const result = await executeQuery(query, [conversationId, searchTerm]);
+
       const messages = result.recordset.slice(0, -1);
       const total = result.recordset[result.recordset.length - 1].total;
-      
+
       return {
         messages,
         total,
@@ -189,7 +189,7 @@ class Message {
         throw new Error('Không có trường nào được cập nhật');
       }
 
-      updates.push('is_edited = 1', 'updated_at = GETDATE()');
+      updates.push('is_edited = 1', 'updated_at = SYSUTCDATETIME()');
       params.push(messageId);
 
       const query = `
@@ -199,7 +199,7 @@ class Message {
       `;
 
       await executeQuery(query, params);
-      
+
       return await this.findById(messageId);
     } catch (error) {
       throw new Error(`Lỗi cập nhật tin nhắn: ${error.message}`);
@@ -211,10 +211,10 @@ class Message {
     try {
       const query = `
         UPDATE Messages 
-        SET is_deleted = 1, deleted_at = GETDATE(), updated_at = GETDATE()
+        SET is_deleted = 1, deleted_at = SYSUTCDATETIME(), updated_at = SYSUTCDATETIME()
         WHERE message_id = @param1
       `;
-      
+
       await executeQuery(query, [messageId]);
       return true;
     } catch (error) {
@@ -229,7 +229,7 @@ class Message {
         DELETE FROM Messages 
         WHERE message_id = @param1
       `;
-      
+
       await executeQuery(query, [messageId]);
       return true;
     } catch (error) {
@@ -250,9 +250,9 @@ class Message {
           AND m.is_deleted = 0
           AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)
       `;
-      
+
       const result = await executeQuery(query, [conversationId, userId]);
-      
+
       return result.recordset[0].unread_count;
     } catch (error) {
       throw new Error(`Lỗi đếm tin nhắn chưa đọc: ${error.message}`);
@@ -276,9 +276,9 @@ class Message {
           AND (cp.last_read_at IS NULL OR m.created_at > cp.last_read_at)
         ORDER BY m.created_at ASC
       `;
-      
+
       const result = await executeQuery(query, [conversationId, userId]);
-      
+
       return result.recordset;
     } catch (error) {
       throw new Error(`Lỗi lấy tin nhắn chưa đọc: ${error.message}`);
@@ -293,13 +293,13 @@ class Message {
         FROM Messages 
         WHERE message_id = @param1 AND is_deleted = 0
       `;
-      
+
       const result = await executeQuery(query, [messageId]);
-      
+
       if (result.recordset.length === 0) {
         return false;
       }
-      
+
       return result.recordset[0].sender_id === userId;
     } catch (error) {
       throw new Error(`Lỗi kiểm tra quyền: ${error.message}`);

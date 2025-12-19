@@ -50,7 +50,7 @@ const Quote = {
     // Attempt IDENTITY-based insert first
     const identityInsert = `
       INSERT INTO Quotes (post_id, tasker_id, variant_id, proposed_price, proposal, status, sent_at)
-      VALUES (@param1, @param2, @param3, @param4, @param5, N'Chờ xử lý', GETDATE());
+      VALUES (@param1, @param2, @param3, @param4, @param5, N'Chờ xử lý', SYSUTCDATETIME());
       SELECT SCOPE_IDENTITY() AS quote_id;
     `;
     try {
@@ -74,7 +74,7 @@ const Quote = {
 
     const explicitInsert = `
       INSERT INTO Quotes (quote_id, post_id, tasker_id, variant_id, proposed_price, proposal, status, sent_at)
-      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, N'Chờ xử lý', GETDATE());
+      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, N'Chờ xử lý', SYSUTCDATETIME());
     `;
     await executeQuery(explicitInsert, [nextId, postId, taskerId, variantId, proposedPrice, proposal || '']);
     return nextId;

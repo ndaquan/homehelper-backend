@@ -29,7 +29,7 @@ class AudioCall {
           status, 
           created_at
         )
-        VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE())
+        VALUES (@param1, @param2, @param3, @param4, @param5, SYSUTCDATETIME())
       `;
 
       await executeQuery(query, [
@@ -199,15 +199,15 @@ class AudioCall {
 
       // Nếu connected → set started_at
       if (status === 'connected' && !additionalData.started_at) {
-        query += `, started_at = GETDATE()`;
+        query += `, started_at = SYSUTCDATETIME()`;
       }
 
       // Nếu ended → set ended_at & duration
       if (status === 'ended') {
-        query += `, ended_at = GETDATE()`;
+        query += `, ended_at = SYSUTCDATETIME()`;
 
         if (additionalData.calculateDuration) {
-          query += `, duration = DATEDIFF(SECOND, started_at, GETDATE())`;
+          query += `, duration = DATEDIFF(SECOND, started_at, SYSUTCDATETIME())`;
         } else if (additionalData.duration !== undefined && additionalData.duration !== null) {
           query += `, duration = @param${paramIndex}`;
           params.push(additionalData.duration);
@@ -221,7 +221,7 @@ class AudioCall {
         }
       }
 
-      query += `, updated_at = GETDATE() WHERE call_id = @param1`;
+      query += `, updated_at = SYSUTCDATETIME() WHERE call_id = @param1`;
 
       await executeQuery(query, params);
       return await this.findById(callId);
@@ -241,14 +241,14 @@ class AudioCall {
       let query = `
             UPDATE AudioCalls
             SET status = 'ended',
-                ended_at = GETDATE(),
-                updated_at = GETDATE()
+                ended_at = SYSUTCDATETIME(),
+                updated_at = SYSUTCDATETIME()
           `;
 
       const params = [callId];
 
       if (calculateDuration) {
-        query += `, duration = DATEDIFF(SECOND, started_at, GETDATE())`;
+        query += `, duration = DATEDIFF(SECOND, started_at, SYSUTCDATETIME())`;
       } else if (durationValue !== null) {
         query += `, duration = @param2`;
         params.push(durationValue);

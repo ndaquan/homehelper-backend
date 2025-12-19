@@ -32,7 +32,7 @@ class Post {
       INSERT INTO Posts (
         user_id, title, content, status, related_booking_id, photo_urls,
         created_at, updated_at
-      ) VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE(), GETDATE());
+      ) VALUES (@param1, @param2, @param3, @param4, @param5, @param6, SYSUTCDATETIME(), SYSUTCDATETIME());
       
       SELECT SCOPE_IDENTITY() AS post_id;
     `;
@@ -324,7 +324,7 @@ class Post {
       throw new Error("No valid fields to update");
     }
 
-    updates.push("updated_at = GETDATE()");
+    updates.push("updated_at = SYSUTCDATETIME()");
     values.push(this.post_id);
 
     const query = `UPDATE Posts SET ${updates.join(
@@ -471,7 +471,7 @@ class Post {
 
     const query = `
     UPDATE Posts
-    SET status = @param1, updated_at = GETDATE()
+    SET status = @param1, updated_at = SYSUTCDATETIME()
     WHERE post_id = @param2
   `;
     await executeQuery(query, [mapped, post_id]);

@@ -23,7 +23,7 @@ const Address = {
     const query = `
       INSERT INTO Addresses (user_id, address, lat, lng, created_at, updated_at)
       OUTPUT INSERTED.*
-      VALUES (@param1, @param2, @param3, @param4, GETDATE(), GETDATE())
+      VALUES (@param1, @param2, @param3, @param4, SYSUTCDATETIME(), SYSUTCDATETIME())
     `;
     const params = [user_id, address, lat, lng];
     const result = await executeQuery(query, params);
@@ -54,7 +54,7 @@ const Address = {
   update: async (address_id, address, lat, lng) => {
     const query = `
       UPDATE Addresses
-      SET address = @param1, lat = @param2, lng = @param3, updated_at = GETDATE()
+      SET address = @param1, lat = @param2, lng = @param3, updated_at = SYSUTCDATETIME()
       OUTPUT INSERTED.*
       WHERE address_id = @param4
     `;
@@ -95,7 +95,7 @@ const Address = {
   },
 
   // Tìm địa chỉ của Tasker với filters: services (array service_id), min_rating
- findFilteredTaskerAddresses: async (min_rating = null, services = []) => {
+  findFilteredTaskerAddresses: async (min_rating = null, services = []) => {
     try {
       let conditions = [
         "a.lat != 0 AND a.lng != 0",

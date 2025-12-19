@@ -13,7 +13,7 @@ class SystemReport {
             const query = `
         INSERT INTO SystemReports (user_id, title, description, image_url, status, created_at, updated_at)
         OUTPUT INSERTED.*
-        VALUES (@user_id, @title, @description, @image_url, 'Pending', GETDATE(), GETDATE())
+        VALUES (@user_id, @title, @description, @image_url, 'Pending', SYSUTCDATETIME(), SYSUTCDATETIME())
       `;
 
             const result = await executeQuery(query, { user_id, title, description, image_url: encrypted_image_url });
@@ -103,7 +103,7 @@ class SystemReport {
         try {
             const query = `
         UPDATE SystemReports
-        SET status = @status, updated_at = GETDATE()
+        SET status = @status, updated_at = SYSUTCDATETIME()
         OUTPUT INSERTED.*
         WHERE report_id = @report_id
       `;

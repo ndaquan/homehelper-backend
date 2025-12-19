@@ -45,7 +45,7 @@ class ComplaintController {
 
             const query = `
         UPDATE CustomerComplaint 
-        SET status = @status, updated_at = GETDATE() 
+        SET status = @status, updated_at = SYSUTCDATETIME() 
         WHERE complaint_id = @id
       `;
             await executeQuery(query, { id, status });

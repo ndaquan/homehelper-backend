@@ -66,7 +66,7 @@ class AdminStatsController {
           COUNT(*) as count,
           SUM(ISNULL(final_price, expected_price)) as revenue
         FROM Bookings
-        WHERE booking_time >= DATEADD(day, -14, GETDATE())
+        WHERE booking_time >= DATEADD(day, -14, SYSUTCDATETIME())
         GROUP BY CAST(booking_time AS DATE)
         ORDER BY date ASC
       `;

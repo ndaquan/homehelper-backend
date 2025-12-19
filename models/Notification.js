@@ -31,7 +31,7 @@ class Notification {
 
       const query = `
         INSERT INTO Notifications (user_id, title, content, type, data, expires_at, created_at)
-        VALUES ${userIds.map((_, index) => `(@param${index * 6 + 1}, @param${index * 6 + 2}, @param${index * 6 + 3}, @param${index * 6 + 4}, @param${index * 6 + 5}, @param${index * 6 + 6}, GETDATE())`).join(', ')};
+        VALUES ${userIds.map((_, index) => `(@param${index * 6 + 1}, @param${index * 6 + 2}, @param${index * 6 + 3}, @param${index * 6 + 4}, @param${index * 6 + 5}, @param${index * 6 + 6}, SYSUTCDATETIME())`).join(', ')};
       `;
 
       const params = [];
@@ -102,7 +102,7 @@ class Notification {
       }
 
       // Loại bỏ thông báo hết hạn
-      whereClause += ` AND (n.expires_at IS NULL OR n.expires_at > GETDATE())`;
+      whereClause += ` AND (n.expires_at IS NULL OR n.expires_at > SYSUTCDATETIME())`;
 
       const offset = (page - 1) * limit;
 
@@ -149,7 +149,7 @@ class Notification {
         FROM Notifications 
         WHERE user_id = @param1 
           AND is_read = 0
-          AND (expires_at IS NULL OR expires_at > GETDATE())
+          AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
       `;
 
       const result = await executeQuery(query, [userId]);
@@ -168,7 +168,7 @@ class Notification {
         FROM Notifications n
         WHERE n.user_id = @param1 
           AND n.is_read = 0
-          AND (n.expires_at IS NULL OR n.expires_at > GETDATE())
+          AND (n.expires_at IS NULL OR n.expires_at > SYSUTCDATETIME())
         ORDER BY n.created_at DESC
       `;
 
@@ -185,7 +185,7 @@ class Notification {
     try {
       const query = `
         UPDATE Notifications 
-        SET is_read = 1, read_at = GETDATE()
+        SET is_read = 1, read_at = SYSUTCDATETIME()
         WHERE notification_id = @param1
       `;
 
@@ -202,7 +202,7 @@ class Notification {
     try {
       const query = `
         UPDATE Notifications 
-        SET is_read = 1, read_at = GETDATE()
+        SET is_read = 1, read_at = SYSUTCDATETIME()
         WHERE user_id = @param1 AND is_read = 0
       `;
 
@@ -249,7 +249,7 @@ class Notification {
     try {
       const query = `
         DELETE FROM Notifications 
-        WHERE expires_at IS NOT NULL AND expires_at < GETDATE()
+        WHERE expires_at IS NOT NULL AND expires_at < SYSUTCDATETIME()
       `;
 
       const result = await executeQuery(query);
@@ -324,7 +324,7 @@ class Notification {
           SUM(CASE WHEN type = 'payment' AND is_read = 0 THEN 1 ELSE 0 END) as unread_payments
         FROM Notifications 
         WHERE user_id = @param1 
-          AND (expires_at IS NULL OR expires_at > GETDATE())
+          AND (expires_at IS NULL OR expires_at > SYSUTCDATETIME())
       `;
 
       const result = await executeQuery(query, [userId]);

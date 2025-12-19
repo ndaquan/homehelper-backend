@@ -10,8 +10,8 @@ CREATE TABLE Sessions (
     finished_at DATETIME2 NULL,
     accumulated_ms BIGINT DEFAULT 0,
     done BIT DEFAULT 0,
-    created_at DATETIME2 DEFAULT GETDATE(),
-    updated_at DATETIME2 DEFAULT GETDATE(),
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 DEFAULT SYSUTCDATETIME(),
     CONSTRAINT UQ_Sessions_BookingDay UNIQUE (booking_id, day_key)
 );
 
@@ -27,9 +27,9 @@ CREATE TABLE SessionPhotos (
     size BIGINT NULL,
     ordinal INT DEFAULT 0,
     uploaded_by INT NULL,
-    uploaded_at DATETIME2 DEFAULT GETDATE(),
-    created_at DATETIME2 DEFAULT GETDATE(),
-    updated_at DATETIME2 DEFAULT GETDATE()
+    uploaded_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
+    updated_at DATETIME2 DEFAULT SYSUTCDATETIME()
 );
 
 ALTER TABLE SessionPhotos

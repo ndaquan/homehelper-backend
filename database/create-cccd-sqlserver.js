@@ -48,8 +48,8 @@ async function createCccdTable() {
         verified_at DATETIME,
         verified_by INT,
         is_deleted BIT DEFAULT 0,
-        created_at DATETIME DEFAULT GETDATE(),
-        updated_at DATETIME DEFAULT GETDATE()
+        created_at DATETIME DEFAULT SYSUTCDATETIME(),
+        updated_at DATETIME DEFAULT SYSUTCDATETIME()
       )
     `;
 
@@ -65,7 +65,7 @@ async function createCccdTable() {
 
     const result = await sql.query(checkUserColumnsQuery);
     const existingColumns = result.recordset.map(row => row.COLUMN_NAME);
-    
+
     console.log('📋 Các cột CCCD hiện có trong users:', existingColumns);
 
     // Thêm cột cccd_status nếu chưa có
@@ -121,7 +121,7 @@ async function createCccdTable() {
     `;
 
     const finalResult = await sql.query(finalCheckQuery);
-    
+
     console.log('\n🔍 Cấu trúc cuối cùng:');
     console.log('📋 Bảng cccd_verification:');
     finalResult.recordset
@@ -132,7 +132,7 @@ async function createCccdTable() {
 
     console.log('\n📋 Bảng users (các cột CCCD):');
     finalResult.recordset
-      .filter(row => row.TABLE_NAME === 'users' && 
+      .filter(row => row.TABLE_NAME === 'users' &&
         (row.COLUMN_NAME.includes('cccd') || row.COLUMN_NAME === 'name' || row.COLUMN_NAME === 'id'))
       .forEach(row => {
         console.log(`  ${row.COLUMN_NAME}: ${row.DATA_TYPE} ${row.IS_NULLABLE === 'NO' ? 'NOT NULL' : ''}`);

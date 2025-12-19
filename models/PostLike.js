@@ -31,7 +31,7 @@ class PostLike {
         const query = `
           INSERT INTO PostLikes (post_id, user_id, liked_at)
           OUTPUT INSERTED.*
-          VALUES (@param1, @param2, GETDATE())
+          VALUES (@param1, @param2, SYSUTCDATETIME())
         `;
         const result = await executeQuery(query, [post_id, user_id]);
         const created = result.recordset[0];
@@ -47,7 +47,7 @@ class PostLike {
       const query = `
         INSERT INTO PostLikes (post_like_id, post_id, user_id, liked_at)
         OUTPUT INSERTED.*
-        VALUES (@param1, @param2, @param3, GETDATE())
+        VALUES (@param1, @param2, @param3, SYSUTCDATETIME())
       `;
       const result = await executeQuery(query, [nextId, post_id, user_id]);
       const created = result.recordset[0];
@@ -70,7 +70,7 @@ class PostLike {
     try {
       const result = await executeQuery(query, [id]);
       if (!result.recordset || result.recordset.length === 0) return null;
-      
+
       return new PostLike(result.recordset[0]);
     } catch (error) {
       throw new Error(`Error finding post like: ${error.message}`);
@@ -83,7 +83,7 @@ class PostLike {
     try {
       const result = await executeQuery(query, [postId, userId]);
       if (!result.recordset || result.recordset.length === 0) return null;
-      
+
       return new PostLike(result.recordset[0]);
     } catch (error) {
       throw new Error(`Error finding post like: ${error.message}`);
@@ -103,7 +103,7 @@ class PostLike {
       ORDER BY pl.liked_at DESC
       OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
     `;
-    
+
     try {
       const result = await executeQuery(query, [postId]);
       const likes = result.recordset.map(row => new PostLike(row));
@@ -143,7 +143,7 @@ class PostLike {
       ORDER BY pl.liked_at DESC
       OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY
     `;
-    
+
     try {
       const result = await executeQuery(query, [userId]);
       const likes = result.recordset.map(row => new PostLike(row));
@@ -175,14 +175,14 @@ class PostLike {
     const query = 'DELETE FROM PostLikes WHERE post_id = @param1 AND user_id = @param2';
     try {
       const result = await executeQuery(query, [postId, userId]);
-      
+
       if (result.rowsAffected[0] === 0) {
         throw new Error('Like không tồn tại');
       }
-      
+
       // Cập nhật số lượng likes trong bảng Posts
       await PostLike.updatePostLikesCount(postId);
-      
+
       return true;
     } catch (error) {
       throw new Error(`Error deleting post like: ${error.message}`);
@@ -200,7 +200,7 @@ class PostLike {
       )
       WHERE post_id = @param2
     `;
-    
+
     try {
       await executeQuery(query, [postId, postId]);
     } catch (error) {
@@ -242,7 +242,7 @@ class PostLike {
       GROUP BY u.user_id, u.name, u.email
       ORDER BY total_likes DESC
     `;
-    
+
     try {
       const result = await executeQuery(query);
       return result.recordset;
@@ -264,7 +264,7 @@ class PostLike {
       GROUP BY p.post_id, p.title, p.content, p.post_date, u.name
       ORDER BY total_likes DESC
     `;
-    
+
     try {
       const result = await executeQuery(query);
       return result.recordset;

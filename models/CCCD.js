@@ -29,7 +29,7 @@ class CCCD {
       // Chuyển đổi format ngày tháng cho SQL Server
       const convertDate = (dateStr) => {
         if (!dateStr) return null;
-        
+
         try {
           // Chuyển từ dd/mm/yyyy sang yyyy-mm-dd
           const parts = dateStr.split('/');
@@ -37,27 +37,27 @@ class CCCD {
             const day = parseInt(parts[0]);
             const month = parseInt(parts[1]);
             const year = parseInt(parts[2]);
-            
+
             // Kiểm tra tính hợp lệ của ngày
             if (day < 1 || day > 31 || month < 1 || month > 12 || year < 1900 || year > 2100) {
               console.warn(`Ngày không hợp lệ: ${dateStr}`);
               return null; // Trả về null thay vì ngày không hợp lệ
             }
-            
+
             // Tạo Date object để kiểm tra ngày có tồn tại không
             const date = new Date(year, month - 1, day);
             if (date.getDate() !== day || date.getMonth() !== month - 1 || date.getFullYear() !== year) {
               console.warn(`Ngày không tồn tại: ${dateStr}`);
               return null;
             }
-            
+
             return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
           }
         } catch (error) {
           console.error(`Lỗi chuyển đổi ngày: ${dateStr}`, error);
           return null;
         }
-        
+
         return null;
       };
 
@@ -75,7 +75,7 @@ class CCCD {
           @front_image_path, @back_image_path, @face_image_path,
           @ocr_text_front, @ocr_text_back, @ocr_accuracy,
           @verification_status, @verified_at, @verified_by,
-          GETDATE(), GETDATE()
+          SYSUTCDATETIME(), SYSUTCDATETIME()
         )
       `;
 
@@ -103,7 +103,7 @@ class CCCD {
 
       const result = await executeNonQuery(query, params);
       console.log('📊 CCCD create result:', result);
-      
+
       // Lấy bản ghi vừa tạo
       if (result && result.insertId) {
         const newRecord = await this.findById(result.insertId);
@@ -129,7 +129,7 @@ class CCCD {
         WHERE user_id = @userId AND is_deleted = 0
         ORDER BY created_at DESC
       `;
-      
+
       const result = await executeQuery(query, { userId });
       return result.recordset;
 
@@ -145,13 +145,13 @@ class CCCD {
         SELECT * FROM cccd_verification 
         WHERE id = @id AND is_deleted = 0
       `;
-      
+
       const result = await executeQuery(query, { id });
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
 
     } catch (error) {
@@ -167,13 +167,13 @@ class CCCD {
         WHERE user_id = @userId AND is_deleted = 0
         ORDER BY created_at DESC
       `;
-      
+
       const result = await executeQuery(query, { userId });
-      
+
       if (result.recordset.length === 0) {
         return null;
       }
-      
+
       return result.recordset[0];
 
     } catch (error) {
@@ -190,14 +190,14 @@ class CCCD {
           verification_status = @status,
           verified_at = @verifiedAt,
           verified_by = @verifiedBy,
-          updated_at = GETDATE()
+          updated_at = SYSUTCDATETIME()
         WHERE id = @id
       `;
-      
+
       const verifiedAt = status === 'Verified' ? new Date().toISOString() : null;
-      
+
       await executeNonQuery(query, { status, verifiedAt, verifiedBy, id });
-      
+
       return await this.findById(id);
 
     } catch (error) {
@@ -242,8 +242,8 @@ class CCCD {
           r.verification_status === 'Verified'
             ? 'CCCD đã được duyệt'
             : r.verification_status === 'Pending'
-            ? 'CCCD đang chờ duyệt'
-            : 'CCCD bị từ chối'
+              ? 'CCCD đang chờ duyệt'
+              : 'CCCD bị từ chối'
       };
     } catch (error) {
       throw new Error(`Lỗi lấy trạng thái CCCD: ${error.message}`);

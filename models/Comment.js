@@ -29,7 +29,7 @@ class Comment {
       const query = `
         INSERT INTO Comments (post_id, video_id, user_id, parent_comment_id, content, created_at)
         OUTPUT INSERTED.comment_id, INSERTED.post_id, INSERTED.video_id, INSERTED.user_id, INSERTED.parent_comment_id, INSERTED.content, INSERTED.created_at
-        VALUES (@param1, @param2, @param3, @param4, @param5, GETDATE())
+        VALUES (@param1, @param2, @param3, @param4, @param5, SYSUTCDATETIME())
       `;
       const result = await executeQuery(query, [
         post_id || null,

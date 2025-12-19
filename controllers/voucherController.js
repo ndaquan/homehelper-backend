@@ -62,7 +62,7 @@ exports.redeemVoucher = async (req, res) => {
     // tạo voucher type = reward, discount = 0.1, expiry_date là computed (tự +7 ngày)
     await executeQuery(
       `INSERT INTO Vouchers (user_id, type, discount, used, created_at)
-       VALUES (@uid, 'reward', 0.1, 0, GETDATE())`,
+       VALUES (@uid, 'reward', 0.1, 0, SYSUTCDATETIME())`,
       { uid: userId }
     );
 
@@ -101,7 +101,7 @@ exports.getAvailableForBooking = async (req, res) => {
        FROM Vouchers
        WHERE user_id = @uid
          AND used = 0
-         AND expiry_date > GETDATE()
+         AND expiry_date > SYSUTCDATETIME()
        ORDER BY expiry_date ASC, voucher_id DESC`,
       { uid: userId }
     );

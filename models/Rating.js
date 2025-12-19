@@ -85,7 +85,7 @@ class Rating {
       const query = `
       INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, status, created_at)
       OUTPUT INSERTED.*
-      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE())
+      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, SYSUTCDATETIME())
     `;
       const params = [
         booking_id,
@@ -168,7 +168,7 @@ class Rating {
     const query = `
     UPDATE Ratings 
     SET staff_reply = @param1,
-        staff_reply_date = GETDATE()
+        staff_reply_date = SYSUTCDATETIME()
     WHERE rating_id = @param2
   `;
     const result = await executeQuery(query, [reply, rating_id]);
