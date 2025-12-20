@@ -184,24 +184,29 @@ exports.momoIpn = async (req, res) => {
       return res.status(200).json({ resultCode: 0, message: 'acknowledged' });
     }
 
-    if (Number(data.resultCode) === 0) {
+    if (Number(resultCode) === 0) {
+      // ✅ CHUẨN HÓA SỐ TIỀN: Chia 1000 để khớp với UI (Ví dụ: nạp 10.000đ -> lưu 10)
+      const uiAmount = Math.floor(Number(amount) / 1000);
+      console.log(`[MoMo IPN] Normalized amount: ${amount} VND -> ${uiAmount}k`);
+
       const ok = await Transaction.markSuccess({
-        order_id: data.orderId,
-        trans_id: String(data.transId || ''),
-        pay_type: data.payType || null,
-        message: data.message || null,
-        result_code: 0,
-        signature: data.signature || null
+        order_id: orderId,
+        trans_id: String(transId || ''),
+        pay_type: payType || 'momo',
+        message: message || 'Success',
+        result_code: resultCode,
+        signature: signature || null
       });
+
       if (ok) {
         // Ghi lịch sử ví
         await WalletTx.addTransaction({
           user_id: tx.user_id,
-          amount: tx.amount,
+          amount: uiAmount, // Lưu giá trị đã chia
           type: 'credit',
           purpose: 'topup',
-          related_id: tx.order_id,
-          note: 'Nạp tiền MoMo'
+          related_id: orderId,
+          note: `Nạp tiền MoMo (Số tiền nạp: ${amount}đ)`
         });
       }
     } else {
@@ -268,7 +273,10 @@ exports.checkOrderStatus = async (req, res) => {
 
     // Nếu đơn đã thành công hoặc thất bại rồi thì trả về luôn
     if (tx.status !== 'pending') {
-      return res.json({ status: tx.status, amount: tx.amount });
+      // For already processed transactions, return the stored amount (which should be uiAmount if processed by IPN/Query)
+      // If the original tx.amount is in VND, we might need to normalize it here too for consistency.
+      // Assuming tx.amount is already in the desired UI format if status is not pending.
+      return res.json({ status: tx.status, amount: Math.floor(Number(tx.amount) / 1000) });
     }
 
     // Nếu vẫn đang pending, chủ động gọi sang MoMo để hỏi (Query Status)
@@ -299,6 +307,10 @@ exports.checkOrderStatus = async (req, res) => {
 
     // Nếu MoMo báo thành công (resultCode = 0)
     if (Number(momoData.resultCode) === 0) {
+      const realAmount = Number(momoData.amount || tx.amount);
+      const uiAmount = Math.floor(realAmount / 1000);
+      console.log(`[MoMo Sync] Normalized amount: ${realAmount} VND -> ${uiAmount}k`);
+
       // Cập nhật Database
       const ok = await Transaction.markSuccess({
         order_id: orderId,
@@ -313,19 +325,19 @@ exports.checkOrderStatus = async (req, res) => {
         console.log('[MoMo Sync] Update DB Success, adding wallet tx...');
         await WalletTx.addTransaction({
           user_id: tx.user_id,
-          amount: tx.amount,
+          amount: uiAmount, // Lưu giá trị đã chia
           type: 'credit',
           purpose: 'topup',
           related_id: orderId,
-          note: 'Nạp tiền MoMo (Đã đồng bộ)'
+          note: `Nạp tiền MoMo (Đã đồng bộ - ${realAmount}đ)`
         });
-        return res.json({ status: 'success', amount: tx.amount });
+        return res.json({ status: 'success', amount: uiAmount });
       } else {
         console.log('[MoMo Sync] DB already updated or update failed');
         // Nếu không update được (có thể do đã success trước đó bởi IPN), 
         // lấy lại trạng thái mới nhất từ DB
         const updatedTx = await Transaction.getByOrderId(orderId);
-        return res.json({ status: updatedTx.status, amount: updatedTx.amount });
+        return res.json({ status: updatedTx.status, amount: Math.floor(Number(updatedTx.amount) / 1000) });
       }
     } else if ([1000, 9000, 7000].includes(Number(momoData.resultCode))) {
       // Các mã này nghĩa là vẫn đang chờ thanh toán
