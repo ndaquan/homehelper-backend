@@ -4,16 +4,16 @@ const { getPool } = require('../config/database');
 const insertPending = async (tx) => {
   const pool = await getPool();
   const r = await pool.request()
-    .input('order_id', sql.NVarChar(64), tx.order_id)
-    .input('request_id', sql.NVarChar(64), tx.request_id || null)
+    .input('order_id', sql.NVarChar(255), tx.order_id)
+    .input('request_id', sql.NVarChar(255), tx.request_id || null)
     .input('user_id', sql.Int, tx.user_id)
-    .input('amount', sql.Int, tx.amount)
-    .input('status', sql.NVarChar(16), 'pending')
-    .input('extra_data', sql.NVarChar(500), tx.extra_data || null)
-    .input('signature', sql.NVarChar(256), tx.signature || null)
+    .input('amount', sql.BigInt, tx.amount)
+    .input('status', sql.NVarChar(50), 'pending')
+    .input('extra_data', sql.NVarChar(sql.MAX), tx.extra_data || null)
+    .input('signature', sql.NVarChar(500), tx.signature || null)
     .query(`
-      INSERT INTO dbo.Transactions(order_id, request_id, user_id, amount, status, extra_data, signature)
-      VALUES (@order_id, @request_id, @user_id, @amount, @status, @extra_data, @signature)
+      INSERT INTO dbo.Transactions(order_id, request_id, user_id, amount, status, extra_data, signature, created_at)
+      VALUES (@order_id, @request_id, @user_id, @amount, @status, @extra_data, @signature, SYSUTCDATETIME())
     `);
   return r.rowsAffected[0] === 1;
 };
@@ -21,12 +21,12 @@ const insertPending = async (tx) => {
 const markSuccess = async ({ order_id, trans_id, pay_type, message, result_code, signature }) => {
   const pool = await getPool();
   const r = await pool.request()
-    .input('order_id', sql.NVarChar(64), order_id)
-    .input('trans_id', sql.NVarChar(64), trans_id || null)
-    .input('pay_type', sql.NVarChar(64), pay_type || null)
-    .input('message', sql.NVarChar(255), message || null)
+    .input('order_id', sql.NVarChar(255), order_id)
+    .input('trans_id', sql.NVarChar(255), trans_id || null)
+    .input('pay_type', sql.NVarChar(100), pay_type || null)
+    .input('message', sql.NVarChar(1000), message || null)
     .input('result_code', sql.Int, result_code ?? 0)
-    .input('signature', sql.NVarChar(256), signature || null)
+    .input('signature', sql.NVarChar(500), signature || null)
     .query(`
       UPDATE dbo.Transactions
       SET status = N'success',
@@ -45,10 +45,10 @@ const markSuccess = async ({ order_id, trans_id, pay_type, message, result_code,
 const markFailed = async ({ order_id, message, result_code, signature }) => {
   const pool = await getPool();
   const r = await pool.request()
-    .input('order_id', sql.NVarChar(64), order_id)
-    .input('message', sql.NVarChar(255), message || null)
+    .input('order_id', sql.NVarChar(255), order_id)
+    .input('message', sql.NVarChar(1000), message || null)
     .input('result_code', sql.Int, result_code ?? -1)
-    .input('signature', sql.NVarChar(256), signature || null)
+    .input('signature', sql.NVarChar(500), signature || null)
     .query(`
       UPDATE dbo.Transactions
       SET status = N'failed',
@@ -57,7 +57,7 @@ const markFailed = async ({ order_id, message, result_code, signature }) => {
           signature = @signature,
           updated_at = SYSUTCDATETIME()
       WHERE order_id = @order_id AND status = N'pending'
-    `); 
+    `);
   return r.rowsAffected[0] === 1;
 };
 
