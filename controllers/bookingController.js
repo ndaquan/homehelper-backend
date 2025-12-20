@@ -1472,7 +1472,8 @@ class BookingController {
           SELECT related_id AS booking_id, SUM(amount) AS earnings
           FROM WalletTransactions
           WHERE user_id = @taskerId
-            AND (type = 'credit' OR type = 'payout')
+            AND type = 'credit'
+            AND (purpose = 'tasker_payout' OR purpose = 'job_income')
             AND created_at >= DATEADD(month, -@months, SYSUTCDATETIME())
           GROUP BY related_id
         )
@@ -1481,7 +1482,7 @@ class BookingController {
                COUNT(B.booking_id) AS bookings,
                ISNULL(SUM(W.earnings), 0) AS earnings
         FROM B
-        LEFT JOIN W ON W.booking_id = B.booking_id
+        LEFT JOIN W ON W.booking_id = CAST(B.booking_id AS NVARCHAR(64))
         LEFT JOIN Services s ON s.service_id = B.service_id
         LEFT JOIN ServiceVariants sv ON sv.variant_id = B.variant_id
         GROUP BY s.service_id, s.name, sv.variant_id, sv.variant_name
