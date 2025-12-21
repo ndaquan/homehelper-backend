@@ -126,6 +126,7 @@ class AudioCallHandler {
       console.log(`📞 [AudioCall] Call initiated: ${callerId} → ${calleeId} (callId: ${callId})`);
     } catch (error) {
       console.error('❌ [AudioCall] Error initiating call:', error.message);
+      console.error(error.stack);
       socket.emit('call_error', {
         error: error.message
       });
@@ -190,6 +191,8 @@ class AudioCallHandler {
         },
         timestamp: new Date().toISOString()
       });
+
+      console.log(`📤 [AudioCall] Sent call_accepted to caller ${call.caller_id}`);
 
       // BACKUP: Emit directly to caller sockets using connectedUsers map
       if (this.socketHandler && this.socketHandler.connectedUsers) {
@@ -410,14 +413,13 @@ class AudioCallHandler {
         throw new Error('Chỉ người gọi mới có thể gửi offer');
       }
 
-      // Gửi offer tới người nhận
-      const calleeRoom = `user_${call.callee_id}`;
+      console.log(`🔊 [AudioCall] WebRTC offer relaying: ${callerId} → ${call.callee_id} (callId: ${callId})`);
       this.io.to(calleeRoom).emit('webrtc_offer', {
         callId,
         offer
       });
 
-      console.log(`🔊 [AudioCall] WebRTC offer sent for call ${callId}`);
+      console.log(`✅ [AudioCall] WebRTC offer sent for call ${callId}`);
     } catch (error) {
       console.error('❌ [AudioCall] Error sending WebRTC offer:', error.message);
       socket.emit('call_error', { error: error.message });
@@ -443,14 +445,13 @@ class AudioCallHandler {
         throw new Error('Chỉ người nhận mới có thể gửi answer');
       }
 
-      // Gửi answer tới người gọi
-      const callerRoom = `user_${call.caller_id}`;
+      console.log(`🔊 [AudioCall] WebRTC answer relaying: ${calleeId} → ${call.caller_id} (callId: ${callId})`);
       this.io.to(callerRoom).emit('webrtc_answer', {
         callId,
         answer
       });
 
-      console.log(`🔊 [AudioCall] WebRTC answer sent for call ${callId}`);
+      console.log(`✅ [AudioCall] WebRTC answer sent for call ${callId}`);
     } catch (error) {
       console.error('❌ [AudioCall] Error sending WebRTC answer:', error.message);
       socket.emit('call_error', { error: error.message });
@@ -476,16 +477,13 @@ class AudioCallHandler {
         throw new Error('Bạn không tham gia cuộc gọi này');
       }
 
-      // Gửi ICE candidate tới phía đối diện
-      const otherUserId = userId === call.caller_id ? call.callee_id : call.caller_id;
-      const otherRoom = `user_${otherUserId}`;
-
+      console.log(`❄️ [AudioCall] ICE candidate relaying: ${userId} → ${otherUserId} (callId: ${callId})`);
       this.io.to(otherRoom).emit('ice_candidate', {
         callId,
         candidate
       });
 
-      console.log(`❄️ [AudioCall] ICE candidate exchanged for call ${callId}`);
+      console.log(`✅ [AudioCall] ICE candidate exchanged for call ${callId}`);
       console.log(`❄️ [AudioCall] ICE candidate exchanged for call ${callId}`);
     } catch (error) {
       console.error('❌ [AudioCall] Error sending ICE candidate:', error.message);
