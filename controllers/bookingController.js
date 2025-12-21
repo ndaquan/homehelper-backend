@@ -1135,11 +1135,23 @@ class BookingController {
       // Earnings: sum WalletTransactions where user_id = tasker and type in ('credit','payout')
       const earningsTotalRes = await executeQuery(
         `
-      SELECT
-        ISNULL(SUM(ISNULL(b.final_price, b.expected_price) * ISNULL(b.quantity, 1) * 0.9), 0) AS total
-      FROM Bookings b
-      WHERE b.tasker_id = @taskerId
-        AND b.status IN (N'Hoàn thành','Completed')
+        SELECT
+          ISNULL(
+            SUM(
+              (
+                CASE 
+                  WHEN b.final_price IS NULL OR b.final_price = 0
+                    THEN b.expected_price
+                  ELSE b.final_price
+                END
+              )
+              * ISNULL(b.quantity, 1)
+              * 0.9
+            ),
+          0) AS total
+        FROM Bookings b
+        WHERE b.tasker_id = @taskerId
+          AND b.status IN (N'Hoàn thành','Completed')
       `,
         { taskerId }
       );
@@ -1214,60 +1226,77 @@ class BookingController {
     }
   }
 
-  static async getTaskerEarningsSeries(req, res) {
-    try {
-      const taskerId = req.user?.userId;
-      if (!taskerId) {
-        return res.status(401).json({ success: false, message: 'Unauthorized' });
-      }
+static async getTaskerEarningsSeries(req, res) {
+  try {
+    const taskerId = req.user?.userId;
+    if (!taskerId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
 
-      const granularity = (req.query.granularity || 'month').toLowerCase();
-      const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
+    const granularity = (req.query.granularity || 'month').toLowerCase();
+    const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
 
-      // Time column to use
-      const timeCol = 'ISNULL(end_time, start_time)';
+    // 🔹 GIỮ NGUYÊN LOGIC TIME HIỆN TẠI
+    const timeCol = 'ISNULL(end_time, start_time)';
 
-      let dateFilter = `${timeCol} >= DATEADD(month, -@periods, SYSUTCDATETIME())`;
-      if (granularity === 'week') {
-        dateFilter = `${timeCol} >= DATEADD(week, -@periods, SYSUTCDATETIME())`;
-      }
-      if (granularity === 'quarter') {
-        dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, SYSUTCDATETIME())`;
-      }
+    let dateFilter = `${timeCol} >= DATEADD(month, -@periods, SYSUTCDATETIME())`;
+    if (granularity === 'week') {
+      dateFilter = `${timeCol} >= DATEADD(week, -@periods, SYSUTCDATETIME())`;
+    }
+    if (granularity === 'quarter') {
+      dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, SYSUTCDATETIME())`;
+    }
 
-      let sql = '';
+    // 🔹 LOGIC GIÁ ĐÃ SỬA ĐÚNG
+    const priceExpr = `
+      (
+        CASE
+          WHEN final_price IS NULL OR final_price = 0
+            THEN expected_price
+          ELSE final_price
+        END
+      ) * ISNULL(quantity, 1) * 0.9
+    `;
 
-      if (granularity === 'week') {
-        sql = `
+    let sql = '';
+
+    // ===== WEEK =====
+    if (granularity === 'week') {
+      sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
             DATEPART(ISO_WEEK, ${timeCol}) AS x,
-            SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9) AS total
+            SUM(${priceExpr}) AS total
           FROM Bookings
           WHERE tasker_id = @taskerId
-            AND status IN (N'Hoàn thành','Completed')
+            AND status IN (N'Hoàn thành', 'Completed')
+            AND ${timeCol} IS NOT NULL
             AND ${dateFilter}
           GROUP BY
             YEAR(${timeCol}),
             DATEPART(ISO_WEEK, ${timeCol})
         )
         SELECT
-          CONCAT(y, '-W', RIGHT('0'+CAST(x AS varchar(2)),2)) AS label,
+          CONCAT(y, '-W', RIGHT('0' + CAST(x AS varchar(2)), 2)) AS label,
           total
         FROM G
         ORDER BY y ASC, x ASC
       `;
-      } else if (granularity === 'quarter') {
-        sql = `
+    }
+
+    // ===== QUARTER =====
+    else if (granularity === 'quarter') {
+      sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
             DATEPART(QUARTER, ${timeCol}) AS x,
-            SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9) AS total
+            SUM(${priceExpr}) AS total
           FROM Bookings
           WHERE tasker_id = @taskerId
-            AND status IN (N'Hoàn thành','Completed')
+            AND status IN (N'Hoàn thành', 'Completed')
+            AND ${timeCol} IS NOT NULL
             AND ${dateFilter}
           GROUP BY
             YEAR(${timeCol}),
@@ -1279,37 +1308,41 @@ class BookingController {
         FROM G
         ORDER BY y ASC, x ASC
       `;
-      } else {
-        // month (default)
-        sql = `
+    }
+
+    // ===== MONTH (DEFAULT) =====
+    else {
+      sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
             MONTH(${timeCol}) AS x,
-            SUM(ISNULL(final_price, expected_price) * ISNULL(quantity, 1) * 0.9) AS total
+            SUM(${priceExpr}) AS total
           FROM Bookings
           WHERE tasker_id = @taskerId
-            AND status IN (N'Hoàn thành','Completed')
+            AND status IN (N'Hoàn thành', 'Completed')
+            AND ${timeCol} IS NOT NULL
             AND ${dateFilter}
           GROUP BY
             YEAR(${timeCol}),
             MONTH(${timeCol})
         )
         SELECT
-          CONCAT(y, '-', RIGHT('0'+CAST(x AS varchar(2)),2)) AS label,
+          CONCAT(y, '-', RIGHT('0' + CAST(x AS varchar(2)), 2)) AS label,
           total
         FROM G
         ORDER BY y ASC, x ASC
       `;
-      }
-
-      const result = await executeQuery(sql, { taskerId, periods });
-      return res.json({ success: true, data: result.recordset || [] });
-    } catch (err) {
-      console.error('❌ getTaskerEarningsSeries:', err);
-      return res.status(500).json({ success: false, message: 'Internal server error' });
     }
+
+    const result = await executeQuery(sql, { taskerId, periods });
+    return res.json({ success: true, data: result.recordset || [] });
+
+  } catch (err) {
+    console.error('❌ getTaskerEarningsSeries:', err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
+}
 
   // Bookings by month: completed vs pending-like
   static async getTaskerBookingsMonthly(req, res) {
