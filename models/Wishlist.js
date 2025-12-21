@@ -26,14 +26,27 @@ class Wishlist {
 
     const placeholders = taskerIds.map((_, i) => `@param${i + 1}`).join(",");
     const query = `
-      SELECT t.tasker_id, u.name, t.rating
+      SELECT t.tasker_id, u.name, ISNULL(rc.avg_rating, 0) AS rating, ISNULL(rc.review_count, 0) AS reviewsCount, u.avatar_url AS avatar
       FROM Taskers t
       JOIN Users u ON t.tasker_id = u.user_id
+      LEFT JOIN (
+        SELECT reviewee_id, 
+               COUNT(*) AS review_count, 
+               AVG(CAST(rating AS FLOAT)) AS avg_rating
+        FROM Ratings
+        WHERE status = 1
+        GROUP BY reviewee_id
+      ) rc ON t.tasker_id = rc.reviewee_id
       WHERE t.tasker_id IN (${placeholders})
     `;
 
     const result = await executeQuery(query, taskerIds);
-    return result.recordset || [];
+    // Decrypt avatar if needed
+    const ImageEncryption = require("../utils/imageEncryption");
+    return (result.recordset || []).map(r => ({
+      ...r,
+      avatar: ImageEncryption && typeof ImageEncryption.decrypt === 'function' ? ImageEncryption.decrypt(r.avatar) : r.avatar
+    }));
   }
 
   // Xóa một tasker khỏi wishlist
@@ -87,4 +100,3 @@ class Wishlist {
 }
 
 module.exports = Wishlist;
-  

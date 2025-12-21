@@ -105,9 +105,9 @@ const Address = {
 
       let paramIndex = 1;
 
-      // Filter rating
+      // Filter rating - use the calculated average from rc
       if (min_rating !== null && !isNaN(min_rating)) {
-        conditions.push(`t.rating >= @param${paramIndex}`);
+        conditions.push(`ISNULL(rc.avg_rating, 0) >= @param${paramIndex}`);
         params.push(min_rating);
         paramIndex++;
       }
@@ -139,7 +139,8 @@ const Address = {
           u.phone,
           u.role,
           u.cccd_status,
-          t.rating,
+          ISNULL(rc.avg_rating, 0) AS rating,
+          ISNULL(rc.review_count, 0) AS reviewsCount,
           (
             SELECT JSON_QUERY((
               SELECT 
@@ -159,6 +160,14 @@ const Address = {
         FROM Addresses a
         INNER JOIN Users u ON a.user_id = u.user_id
         INNER JOIN Taskers t ON t.tasker_id = u.user_id
+        LEFT JOIN (
+          SELECT reviewee_id, 
+                 COUNT(*) AS review_count,
+                 AVG(CAST(rating AS FLOAT)) AS avg_rating
+          FROM Ratings
+          WHERE status = 1
+          GROUP BY reviewee_id
+        ) rc ON t.tasker_id = rc.reviewee_id
         WHERE ${whereClause}
       `;
 

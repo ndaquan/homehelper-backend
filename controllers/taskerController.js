@@ -808,6 +808,7 @@ exports.searchNearbyUsers = async (req, res) => {
         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         const distance = R * c * 1000; // Convert to meters
 
+        const ImageEncryption = require("../utils/imageEncryption");
         return {
           user_id: addr.user_id,
           name: addr.name,
@@ -819,6 +820,8 @@ exports.searchNearbyUsers = async (req, res) => {
           lat: addr.lat,
           lng: addr.lng,
           rating: addr.rating,
+          reviewsCount: addr.reviewsCount || 0,
+          avatar: ImageEncryption && typeof ImageEncryption.decrypt === 'function' ? ImageEncryption.decrypt(addr.avatar) : addr.avatar,
           distance: parseFloat(distance.toFixed(2)), // Round to 2 decimal places
           service_variants: addr.service_variants || [], // Ensure service_variants is always an array
         };
