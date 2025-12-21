@@ -329,7 +329,7 @@ exports.checkOrderStatus = async (req, res) => {
           type: 'credit',
           purpose: 'topup',
           related_id: orderId,
-          note: `Nạp tiền MoMo (Đã đồng bộ - ${realAmount}đ)`
+          note: `Nạp tiền MoMo (${realAmount}đ)`
         });
         return res.json({ status: 'success', amount: uiAmount });
       } else {
