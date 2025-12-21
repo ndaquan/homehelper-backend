@@ -71,7 +71,7 @@ class Tasker {
         t.Introduce AS Introduce,
         t.certifications,
         t.status,
-        ISNULL(t.rating, 0) AS rating,
+        ISNULL(rc.avg_rating, 0) AS rating,
         ISNULL(t.reliability_score, 100) AS reliability_score,
         ISNULL(rc.review_count, 0) AS reviewsCount,
         s.service_id,
@@ -87,8 +87,11 @@ class Tasker {
       LEFT JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
       LEFT JOIN Services s ON sv.service_id = s.service_id
       LEFT JOIN (
-        SELECT reviewee_id, COUNT(*) AS review_count
+        SELECT reviewee_id, 
+               COUNT(*) AS review_count,
+               AVG(CAST(rating AS FLOAT)) AS avg_rating
         FROM Ratings
+        WHERE status = 1
         GROUP BY reviewee_id
       ) rc ON t.tasker_id = rc.reviewee_id
       ${whereClause}
@@ -218,7 +221,7 @@ class Tasker {
           t.Introduce AS Introduce,
           t.certifications,
           t.status,
-          ISNULL(t.rating, 0) AS rating,
+          ISNULL(rc.avg_rating, 0) AS rating,
           ISNULL(t.reliability_score, 100) AS reliability_score,
           ISNULL(rc.review_count, 0) AS reviewsCount,
           s.service_id,
@@ -234,8 +237,11 @@ class Tasker {
         JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
         JOIN Services s ON sv.service_id = s.service_id
         LEFT JOIN (
-          SELECT reviewee_id, COUNT(*) AS review_count
+          SELECT reviewee_id, 
+                 COUNT(*) AS review_count,
+                 AVG(CAST(rating AS FLOAT)) AS avg_rating
           FROM Ratings
+          WHERE status = 1
           GROUP BY reviewee_id
         ) rc ON t.tasker_id = rc.reviewee_id
         WHERE sv.variant_id = @param1
