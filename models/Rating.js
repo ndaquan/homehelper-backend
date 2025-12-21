@@ -1,6 +1,19 @@
 // models/Rating.js
 const { executeQuery } = require("../config/database");
 const { processReview } = require("../config/gemini.service");
+const ImageEncryption = require("../utils/imageEncryption");
+
+const safeDecrypt = (value) => {
+  try {
+    if (!value) return value;
+    if (ImageEncryption && typeof ImageEncryption.decrypt === 'function') {
+      return ImageEncryption.decrypt(value);
+    }
+    return value;
+  } catch (_) {
+    return value;
+  }
+};
 
 class Rating {
   static async getByTaskerId(taskerId, currentUserId = null) {
@@ -17,6 +30,7 @@ class Rating {
       r.staff_reply_date,
       r.helpful,   
       s.name AS service_name,
+      u.avatar_url AS avatar,
       0 AS userLiked,
       (SELECT TOP 1 photo_url FROM TaskPhotos tp WHERE tp.booking_id = r.booking_id AND tp.photo_type = 'after') AS booking_image,
       (SELECT TOP 1 description FROM Tasks t WHERE t.booking_id = r.booking_id) AS task_description
@@ -36,6 +50,7 @@ class Rating {
       reviews: rows.map((r) => ({
         id: r.rating_id,
         name: r.reviewer_name || "Ẩn danh",
+        reviewer_avatar: safeDecrypt(r.avatar),
         reviewee_id: r.reviewee_id,
         rating: r.rating || 0,
         text: r.text || "",
