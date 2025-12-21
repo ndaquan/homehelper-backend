@@ -414,6 +414,7 @@ class AudioCallHandler {
       }
 
       console.log(`🔊 [AudioCall] WebRTC offer relaying: ${callerId} → ${call.callee_id} (callId: ${callId})`);
+      const calleeRoom = `user_${call.callee_id}`;
       this.io.to(calleeRoom).emit('webrtc_offer', {
         callId,
         offer
@@ -446,6 +447,7 @@ class AudioCallHandler {
       }
 
       console.log(`🔊 [AudioCall] WebRTC answer relaying: ${calleeId} → ${call.caller_id} (callId: ${callId})`);
+      const callerRoom = `user_${call.caller_id}`;
       this.io.to(callerRoom).emit('webrtc_answer', {
         callId,
         answer
@@ -476,6 +478,9 @@ class AudioCallHandler {
       if (call.caller_id !== userId && call.callee_id !== userId) {
         throw new Error('Bạn không tham gia cuộc gọi này');
       }
+
+      const otherUserId = userId === call.caller_id ? call.callee_id : call.caller_id;
+      const otherRoom = `user_${otherUserId}`;
 
       console.log(`❄️ [AudioCall] ICE candidate relaying: ${userId} → ${otherUserId} (callId: ${callId})`);
       this.io.to(otherRoom).emit('ice_candidate', {
