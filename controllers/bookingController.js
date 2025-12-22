@@ -879,7 +879,7 @@ class BookingController {
       }
 
       await executeQuery(
-        `UPDATE Bookings SET final_price = @param1 WHERE booking_id = @param2`,
+        `UPDATE Bookings SET base_price = @param1 WHERE booking_id = @param2`,
         [Number(price), bookingId]
       );
       return res.json({ success: true, bookingId, final_price: Number(price) });
