@@ -151,6 +151,29 @@ class User {
     }
   }
 
+  // Cập nhật password
+  static async updatePassword(userId, newPassword) {
+    try {
+      // Hash password mới
+      const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+      const query = `
+        UPDATE users 
+        SET password = @password, updated_at = GETDATE()
+        WHERE user_id = @userId
+      `;
+
+      await executeNonQuery(query, {
+        userId,
+        password: hashedPassword
+      });
+
+      return true;
+    } catch (error) {
+      throw new Error(`Lỗi cập nhật password: ${error.message}`);
+    }
+  }
+
   // Tạo user mới
   static async create(userData) {
     try {
