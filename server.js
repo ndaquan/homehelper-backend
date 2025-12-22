@@ -85,7 +85,7 @@ app.use("/api/ratings", require("./routes/ratings"));
 app.use("/api/wishlists", require("./routes/wishlist"));
 
 // app.use('/api/feedbacks', require('./routes/feedbacks'));
-// app.use('/api/complaints', require('./routes/complaints'));
+app.use('/api/complaints', require('./routes/complaints'));
 // app.use('/api/notifications', require('./routes/notifications'));
 app.use("/api/momo", require("./routes/momo"));
 app.use("/api/wallet", require("./routes/wallet"));
@@ -105,10 +105,11 @@ app.use("/api/negotiations", require("./routes/negotiations"));
 app.use("/api/badges", require("./routes/badges"));
 app.use("/api/evidence", require("./routes/evidence"))
 // app.use('/api/users', require('./routes/users'));
-// app.use('/api/bookings', require('./routes/bookings'));
+app.use("/api/vouchers", require("./routes/vouchers"));
 // app.use('/api/posts', require('./routes/posts'));
 app.use('/api/system-reports', require('./routes/systemReports'));
 app.use('/api/chatbot', require('./routes/chatbot'));
+app.use('/api/audio-calls', require('./routes/audioCallRoutes'));
 
 // Health check endpoint
 app.get("/health", (req, res) => {

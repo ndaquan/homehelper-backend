@@ -6,6 +6,7 @@ const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const Notification = require('../models/Notification');
 const { notifySosRequestToTaskers } = require('../services/notification.service');
+const AudioCallHandler = require('./audioCallHandler');
 
 class SocketHandler {
   constructor(io) {
@@ -15,7 +16,10 @@ class SocketHandler {
     this.typingUsers = new Map(); // Map<conversationId, Set<userId>>
     this.joinedRooms = new Map(); // Map<socketId, Set<roomName>>
     this.readThrottle = new Map(); // Map<userId:conversationId, timestamp>
-    
+
+    // Khởi tạo AudioCallHandler
+    this.audioCallHandler = new AudioCallHandler(io, this);
+
     this.setupMiddleware();
     this.setupEventHandlers();
   }
@@ -25,7 +29,7 @@ class SocketHandler {
     this.io.use(async (socket, next) => {
       try {
         const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.replace('Bearer ', '');
-        
+
         if (!token) {
           return next(new Error('Không có token xác thực'));
         }
@@ -37,7 +41,7 @@ class SocketHandler {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         const userId = decoded.user_id ?? decoded.userId;
         const user = await User.findById(userId);
-        
+
         if (!user) {
           return next(new Error('User không tồn tại'));
         }
@@ -53,7 +57,7 @@ class SocketHandler {
 
   // Thiết lập các event handlers
   setupEventHandlers() {
-  this.io.on('connection', async (socket) => {
+    this.io.on('connection', async (socket) => {
       // Lưu thông tin kết nối
       if (!this.connectedUsers.has(socket.userId)) {
         this.connectedUsers.set(socket.userId, new Set());
@@ -62,34 +66,36 @@ class SocketHandler {
       this.userSockets.set(socket.id, socket.userId);
       try {
         // Join a per-user room for targeted emits from services
-        socket.join(`user_${socket.userId}`);
+        const userRoom = `user_${socket.userId}`;
+        socket.join(userRoom);
+        console.log(`✅ User ${socket.userId} joined room: ${userRoom}`);
       } catch (e) {
         console.warn('Could not join user room for socket:', e?.message || e);
       }
       this.joinedRooms.set(socket.id, new Set());
 
 
-    // Log danh sách user online sau mỗi kết nối mới
-    console.log('Current online users:', Array.from(this.connectedUsers.keys()));
+      // Log danh sách user online sau mỗi kết nối mới
+      console.log('Current online users:', Array.from(this.connectedUsers.keys()));
 
-    // Gửi thông báo user online
-    this.broadcastUserStatus(socket.userId, 'online');
+      // Gửi thông báo user online
+      this.broadcastUserStatus(socket.userId, 'online');
 
-    // Nếu user là Tasker thì cập nhật trạng thái "Hoạt động"
-    try {
-      if (socket.user?.role === 'Tasker') {
-        await Tasker.updateStatus(socket.userId, 'Active');
+      // Nếu user là Tasker thì cập nhật trạng thái "Hoạt động"
+      try {
+        if (socket.user?.role === 'Tasker') {
+          await Tasker.updateStatus(socket.userId, 'Hoạt động');
+        }
+      } catch (e) {
+        console.error('Không thể cập nhật trạng thái Tasker khi connect:', e?.message || e);
       }
-    } catch (e) {
-      console.error('Không thể cập nhật trạng thái Tasker khi connect:', e?.message || e);
-    }
 
-    // Gửi danh sách user online cho riêng socket mới connect
-    console.log(`📤 Emit online_users cho user ${socket.userId}`);
-    socket.emit('online_users', this.getOnlineUsers());
-    // Gửi danh sách user online cho toàn bộ client (nếu muốn cập nhật realtime cho các client khác)
-    console.log('📤 Emit online_users cho toàn bộ client');
-    this.io.emit('online_users', this.getOnlineUsers());
+      // Gửi danh sách user online cho riêng socket mới connect
+      console.log(`📤 Emit online_users cho user ${socket.userId}`);
+      socket.emit('online_users', this.getOnlineUsers());
+      // Gửi danh sách user online cho toàn bộ client (nếu muốn cập nhật realtime cho các client khác)
+      console.log('📤 Emit online_users cho toàn bộ client');
+      this.io.emit('online_users', this.getOnlineUsers());
 
       // Đăng ký events
       socket.on('join_conversation', (data) => this.handleJoinConversation(socket, data));
@@ -102,6 +108,9 @@ class SocketHandler {
       socket.on('disconnect', () => this.handleDisconnect(socket));
       socket.on('create_sos_job', (data) => this.handleCreateSOSJob(socket, data));
       socket.on('accept_sos_job', (data) => this.handleAcceptSOSJob(socket, data));
+
+      // Audio call events
+      this.audioCallHandler.setupSocketListeners(socket);
     });
   }
 
@@ -216,7 +225,7 @@ class SocketHandler {
                 senderName: socket.user.name,
                 content: content.length > 100 ? content.substring(0, 100) + '...' : content
               });
-            });v
+            }); v
           }
         } catch (err) {
           console.error('Lỗi tạo notification:', err);
@@ -227,7 +236,7 @@ class SocketHandler {
       socket.emit('error', { message: 'Lỗi gửi tin nhắn' });
     }
   }
-async handleCreateSOSJob(socket, data) {
+  async handleCreateSOSJob(socket, data) {
     console.log('📩 handleCreateSOSJob called by user:', socket.userId, 'role:', socket.user?.role);
 
     if (socket.user?.role !== 'Customer') {
@@ -235,8 +244,8 @@ async handleCreateSOSJob(socket, data) {
       return socket.emit('error', { message: 'Chỉ khách hàng mới tạo được SOS job' });
     }
 
-    const { variant_id, location, address, start_time, task, duration_hours, duration_days, type: workType, expected_price: client_expected_price } = data || {};
-    console.log('📥 createSOS payload:', { variant_id, location, address, start_time, task, duration_hours, duration_days, workType, client_expected_price });
+    const { variant_id, location, address, start_time, task, duration_hours, duration_days, type: workType, expected_price: client_expected_price, total_sessions, dates } = data || {};
+    console.log('📥 createSOS payload:', { variant_id, location, address, start_time, task, duration_hours, duration_days, workType, client_expected_price, total_sessions, dates });
 
     // Accept either an address (preferred) or location coordinates
     const hasLocation = (address && String(address).trim()) || (location && String(location).trim());
@@ -293,20 +302,20 @@ async handleCreateSOSJob(socket, data) {
           customer_id, tasker_id, service_id, variant_id,
           booking_time, start_time, end_time, location, status,
           base_price, surcharge, type,
-          sos_expires_at, expected_price
+          sos_expires_at, expected_price, total_sessions
         )
         OUTPUT INSERTED.booking_id AS inserted_id
         VALUES (
           @customer_id, NULL, @service_id, @variant_id,
-          GETDATE(), DATEADD(MINUTE, 20, GETDATE()),
+          SYSUTCDATETIME(), DATEADD(MINUTE, 20, SYSUTCDATETIME()),
             CASE
-              WHEN TRY_CAST(@duration_hours AS INT) IS NOT NULL AND TRY_CAST(@duration_hours AS INT) > 0 THEN DATEADD(HOUR, TRY_CAST(@duration_hours AS INT), DATEADD(MINUTE, 20, GETDATE()))
-              WHEN TRY_CAST(@duration_days AS INT) IS NOT NULL AND TRY_CAST(@duration_days AS INT) > 0 THEN DATEADD(DAY, TRY_CAST(@duration_days AS INT), DATEADD(MINUTE, 20, GETDATE()))
+              WHEN TRY_CAST(@duration_hours AS INT) IS NOT NULL AND TRY_CAST(@duration_hours AS INT) > 0 THEN DATEADD(HOUR, TRY_CAST(@duration_hours AS INT), DATEADD(MINUTE, 20, SYSUTCDATETIME()))
+              WHEN TRY_CAST(@duration_days AS INT) IS NOT NULL AND TRY_CAST(@duration_days AS INT) > 0 THEN DATEADD(DAY, TRY_CAST(@duration_days AS INT), DATEADD(MINUTE, 20, SYSUTCDATETIME()))
               ELSE NULL
             END,
           @location, N'Chờ xử lý',
           @base_price, 0, @type,
-          DATEADD(MINUTE, 10, GETDATE()), @expected_price
+          DATEADD(MINUTE, 10, SYSUTCDATETIME()), @expected_price, @total_sessions
         )
       `, {
         customer_id: socket.userId,
@@ -318,6 +327,7 @@ async handleCreateSOSJob(socket, data) {
         location: savedLocation,
         base_price,
         expected_price: expected_price,
+        total_sessions: total_sessions || 1,
         type: 'SOS'
       });
 
@@ -328,26 +338,76 @@ async handleCreateSOSJob(socket, data) {
       }
       console.log('✅ Booking created with id:', bookingId);
 
-      // Tạo Task mô tả công việc
-      console.log('📝 Inserting task for booking:', bookingId);
-      const taskInsertRes = await executeQuery(`
-        INSERT INTO Tasks (booking_id, description, checklist, photos, completed)
-        VALUES (@bid, @desc, @check, @photos, 0)
-      `, {
-        bid: bookingId,
-        desc: task.description.trim(),
-        check: task.checklist || null,
-        photos: JSON.stringify(task.photos || [])
-      });
-      console.log('🗂 taskInsertRes:', taskInsertRes && taskInsertRes.recordset ? taskInsertRes.recordset : taskInsertRes);
+      // Tạo các Tasks (Sessions) cho booking
+      const sessionsCount = Number(total_sessions) || 1;
+      const computedStartTime = new Date(Date.now() + 20 * 60 * 1000);
 
-      // Phát sóng cho tất cả Tasker cung cấp variant này
-      console.log('🔎 Querying taskers for variant:', variant_id);
-      const taskers = await executeQuery(`
+      // Use Vietnam time for fallback session date to match frontend expectation
+      const vnNow = new Date(Date.now() + (7 * 60 + 20) * 60 * 1000);
+      const vnDateStr = vnNow.toISOString().split('T')[0];
+
+      const sessionDates = (Array.isArray(dates) && dates.length > 0) ? dates : [vnDateStr];
+
+      console.log(`📝 Inserting ${sessionsCount} tasks for booking:`, bookingId);
+
+      for (let i = 0; i < sessionsCount; i++) {
+        const currentSessionDate = sessionDates[i] || null;
+
+        await executeQuery(`
+          INSERT INTO Tasks (
+            booking_id, description, checklist, photos, completed,
+            session_number, session_date, status
+          )
+          VALUES (
+            @bid, @desc, @check, @photos, 0,
+            @sNum, @sDate, N'Chờ thực hiện'
+          )
+        `, {
+          bid: bookingId,
+          desc: task.description.trim(),
+          check: task.checklist || null,
+          photos: JSON.stringify(task.photos || []),
+          sNum: i + 1,
+          sDate: currentSessionDate ? new Date(currentSessionDate) : null
+        });
+      }
+      console.log(`✅ successfully created ${sessionsCount} sessions.`);
+
+      // Phát sóng cho tất cả Tasker cung cấp SERVICE này TRONG PHẠM VI 15KM
+      // Parse lat/lng from location string (format: "lat,lng")
+      let lat = 0, lng = 0;
+      if (location && location.includes(',')) {
+        [lat, lng] = location.split(',').map(n => parseFloat(n.trim()));
+      }
+
+      console.log(`🔎 Querying taskers for service: ${service_id}, radius: 15km around (${lat}, ${lng})`);
+
+      let taskerQuery = `
         SELECT DISTINCT tsv.tasker_id
         FROM TaskerServiceVariants tsv
-        WHERE tsv.variant_id = @vId
-      `, { vId: variant_id });
+        JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+        JOIN Addresses a ON tsv.tasker_id = a.user_id
+        WHERE sv.service_id = @sId
+          AND a.lat != 0 AND a.lng != 0
+      `;
+
+      // Only apply distance filter if we have valid coords
+      if (lat && lng) {
+        // Haversine formula in SQL Server
+        taskerQuery += `
+          AND (6371000 * 2 * ATN2(SQRT(
+            SIN(RADIANS(a.lat - @lat)/2) * SIN(RADIANS(a.lat - @lat)/2) + 
+            COS(RADIANS(@lat)) * COS(RADIANS(a.lat)) * 
+            SIN(RADIANS(a.lng - @lng)/2) * SIN(RADIANS(a.lng - @lng)/2)
+          ), SQRT(1 - (
+            SIN(RADIANS(a.lat - @lat)/2) * SIN(RADIANS(a.lat - @lat)/2) + 
+            COS(RADIANS(@lat)) * COS(RADIANS(a.lat)) * 
+            SIN(RADIANS(a.lng - @lng)/2) * SIN(RADIANS(a.lng - @lng)/2)
+          )))) <= 15000
+        `;
+      }
+
+      const taskers = await executeQuery(taskerQuery, { sId: service_id, lat, lng });
 
       console.log('📊 taskers result:', taskers && taskers.recordset ? taskers.recordset : taskers);
 
@@ -355,7 +415,6 @@ async handleCreateSOSJob(socket, data) {
       const sosExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       // Compute the same start_time on the Node server so emitted payload matches DB
-      const computedStartTime = new Date(Date.now() + 20 * 60 * 1000);
 
       const sosJob = {
         booking_id: bookingId,
@@ -369,9 +428,13 @@ async handleCreateSOSJob(socket, data) {
         start_time: computedStartTime.toISOString(),
         description: task.description,
         final_price: base_price,
+        total_sessions: sessionsCount,
+        dates: sessionDates,
         type: 'SOS',
         sos_expires_at: sosExpiresAt,
-        expires_in_seconds: 600
+        expires_in_seconds: 600,
+        // Send lat/lng for client-side distance calc if needed
+        lat, lng
       };
 
       // Use unified notification service to notify customer + taskers and emit broadcast
@@ -381,7 +444,8 @@ async handleCreateSOSJob(socket, data) {
           customer_id: socket.userId,
           variant_id,
           service_id,
-          location: savedLocation,
+          location, // Pass raw "lat,lng" string for notification service to parse
+          saved_location: savedLocation
         });
       } catch (notifyErr) {
         console.warn('[SOS] notifySosRequestToTaskers failed:', notifyErr?.message || notifyErr);
@@ -400,7 +464,7 @@ async handleCreateSOSJob(socket, data) {
           }
         }
       } else {
-        console.warn('⚠️ No taskers found for variant:', variant_id);
+        console.log('⚠️ No taskers found for service within 15km:', service_id);
       }
 
       socket.emit('sos_job_created', {
@@ -435,7 +499,7 @@ async handleCreateSOSJob(socket, data) {
     console.log(`\n[SOS ACCEPT] ====== STARTING handleAcceptSOSJob ======`);
     console.log(`[SOS ACCEPT] socket.userId: ${socket.userId}, socket.user?.role: ${socket.user?.role}`);
     console.log(`[SOS ACCEPT] data:`, data);
-    
+
     if (socket.user?.role !== 'Tasker') {
       console.log(`[SOS ACCEPT] ❌ User is not Tasker, rejecting`);
       return socket.emit('error', { message: 'Chỉ Tasker mới được nhận SOS job' });
@@ -451,7 +515,7 @@ async handleCreateSOSJob(socket, data) {
 
     try {
       console.log(`[SOS ACCEPT] Executing UPDATE query...`);
-      
+
       const result = await executeQuery(`
         BEGIN TRAN;
 
@@ -483,7 +547,7 @@ async handleCreateSOSJob(socket, data) {
 
       if (taken) {
         console.log(`[SOS] Job #${booking_id} → ĐÃ CẬP NHẬT (${affectedRows} row affected) với tasker_id=${socket.userId}`);
-        
+
         // Broadcast broadly and also notify only taskers who received the job
         const takenPayload = {
           booking_id,
@@ -493,11 +557,16 @@ async handleCreateSOSJob(socket, data) {
         this.io.emit('sos_job_taken', takenPayload);
 
         try {
-          // Find variant_id for this booking so we can notify taskers who were targeted
-          const bidRes = await executeQuery(`SELECT variant_id FROM Bookings WHERE booking_id = @id`, { id: booking_id });
-          const variantId = bidRes.recordset?.[0]?.variant_id;
-          if (variantId) {
-            const tRes = await executeQuery(`SELECT DISTINCT tsv.tasker_id FROM TaskerServiceVariants tsv WHERE tsv.variant_id = @vId`, { vId: variantId });
+          // Find service_id for this booking so we can notify taskers who were targeted
+          const bidRes = await executeQuery(`SELECT service_id FROM Bookings WHERE booking_id = @id`, { id: booking_id });
+          const serviceId = bidRes.recordset?.[0]?.service_id;
+          if (serviceId) {
+            const tRes = await executeQuery(`
+              SELECT DISTINCT tsv.tasker_id
+              FROM TaskerServiceVariants tsv
+              JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+              WHERE sv.service_id = @sId
+            `, { sId: serviceId });
             const targeted = tRes.recordset || [];
             targeted.forEach(t => {
               if (t.tasker_id === socket.userId) return; // skip the taker
@@ -518,14 +587,14 @@ async handleCreateSOSJob(socket, data) {
         const custRes = await executeQuery(`SELECT customer_id FROM Bookings WHERE booking_id = @id`, { id: booking_id });
         const customerId = custRes.recordset?.[0]?.customer_id;
         console.log(`[SOS] Looking for customer socket - customerId: ${customerId}, connectedUsers:`, Array.from(this.connectedUsers.keys()));
-        
+
         const acceptedPayload = {
           booking_id,
           taken_by_tasker_id: socket.userId,
           taken_by_name: socket.user.name,
           message: 'Có Tasker đã nhận công việc của bạn!'
         };
-        
+
         const custSockets = this.connectedUsers.get(customerId);
         if (custSockets && custSockets.size > 0) {
           console.log(`[SOS] Found customer socket(s) for customer ${customerId}:`, custSockets.size);
@@ -540,9 +609,9 @@ async handleCreateSOSJob(socket, data) {
           this.io.emit('sos_job_accepted', acceptedPayload);
         }
 
-        socket.emit('sos_accept_success', { 
-          booking_id, 
-          message: 'Chúc mừng! Bạn đã nhận được công việc!' 
+        socket.emit('sos_accept_success', {
+          booking_id,
+          message: 'Chúc mừng! Bạn đã nhận được công việc!'
         });
 
         console.log(`[SOS] Job #${booking_id} → ĐÃ CHẤP NHẬN bởi Tasker ${socket.userId}`);
@@ -666,17 +735,21 @@ async handleCreateSOSJob(socket, data) {
           // Nếu user là Tasker và không còn kết nối nào thì cập nhật "Không hoạt động"
           try {
             if (socket.user?.role === 'Tasker') {
-              await Tasker.updateStatus(userId, 'Inactive');
+              await Tasker.updateStatus(userId, 'Không hoạt động');
             }
           } catch (e) {
             console.error('Không thể cập nhật trạng thái Tasker khi disconnect:', e?.message || e);
           }
         }
       }
-  this.userSockets.delete(socket.id);
-  // Log danh sách user online trước khi gửi cho FE
-  console.log('Emit online_users after disconnect:', this.getOnlineUsers());
-  this.io.emit('online_users', this.getOnlineUsers());
+      this.userSockets.delete(socket.id);
+
+      // Handle audio call cleanup
+      await this.audioCallHandler.handleDisconnect(socket);
+
+      // Log danh sách user online trước khi gửi cho FE
+      console.log('Emit online_users after disconnect:', this.getOnlineUsers());
+      this.io.emit('online_users', this.getOnlineUsers());
     } catch (error) {
       console.error('Lỗi disconnect:', error);
     }

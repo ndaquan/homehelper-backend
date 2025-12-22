@@ -11,8 +11,8 @@ function hoursUntil(startTimeISO) {
  * Returns { ruleCode, refundPercent, compensationPercent, note }
  */
 function calculateRefundPolicy(booking, cancelledBy) {
-  // Tổng tiền làm căn cứ hoàn/bồi thường: nếu đã thanh toán dùng final_price, chưa thanh toán fallback expected_price.
-  const total = Number(booking.final_price || booking.expected_price || 0);
+  // Tổng tiền làm căn cứ hoàn/bồi thường: chỉ sử dụng paid_amount vì đó là số tiền thực tế khách đã trả.
+  const total = Number(booking.paid_amount || 0);
 
   // R6: Khách không có mặt (no_show) = giống <4h (R4) nhưng yêu cầu bằng chứng ở tầng controller
   if (cancelledBy === "no_show") {
@@ -20,7 +20,7 @@ function calculateRefundPolicy(booking, cancelledBy) {
       ruleCode: "R6",
       refundPercent: 0,
       compensationPercent: 100,
-      note: "Khách không có mặt / không mở cửa (xác thực hợp lệ)",
+      note: "Khách không có mặt / không mở cửa (xác thực hợp lệ), trả tiền tasker",
       total,
     };
   }
@@ -41,7 +41,8 @@ function calculateRefundPolicy(booking, cancelledBy) {
       ruleCode: "R5",
       refundPercent: 100,
       compensationPercent: 0,
-      note: "Tasker hủy sát giờ"
+      note: "Tasker hủy sát giờ, hoàn tiền cho khách",
+      total,
     };
   }
 
@@ -51,7 +52,7 @@ function calculateRefundPolicy(booking, cancelledBy) {
       ruleCode: "R8",
       refundPercent: 100,
       compensationPercent: 0,
-      note: "Báo cáo bị từ chối – Tasker cung cấp bằng chứng không hợp lệ",
+      note: "Báo cáo bị từ chối – Tasker cung cấp bằng chứng không hợp lệ, hoàn tiền cho khách",
       total,
     };
   }
@@ -61,16 +62,16 @@ function calculateRefundPolicy(booking, cancelledBy) {
     const diffHours = hoursUntil(booking.start_time);
 
     if (diffHours > 24) {
-      return { ruleCode: "R1", refundPercent: 100, compensationPercent: 0, note: "Khách hủy >24h trước giờ làm", total };
+      return { ruleCode: "R1", refundPercent: 100, compensationPercent: 0, note: "Khách hủy >24h trước giờ làm, hoàn 100% cho khách", total };
     }
     if (diffHours > 12) {
-      return { ruleCode: "R2", refundPercent: 75, compensationPercent: 25, note: "Khách hủy 12–24h trước giờ làm", total };
+      return { ruleCode: "R2", refundPercent: 75, compensationPercent: 25, note: "Khách hủy 12–24h trước giờ làm, hoàn 75% cho khách", total };
     }
     if (diffHours > 4) {
-      return { ruleCode: "R3", refundPercent: 50, compensationPercent: 50, note: "Khách hủy 4–12h trước giờ làm", total };
+      return { ruleCode: "R3", refundPercent: 50, compensationPercent: 50, note: "Khách hủy 4–12h trước giờ làm, hoàn 50% cho khách", total };
     }
     // <= 4h
-    return { ruleCode: "R4", refundPercent: 0, compensationPercent: 100, note: "Khách hủy <4h trước giờ làm", total };
+    return { ruleCode: "R4", refundPercent: 0, compensationPercent: 100, note: "Khách hủy < 4h trước giờ làm, hoàn 100% cho khách", total };
   }
 
   // Fallback

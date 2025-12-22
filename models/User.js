@@ -74,7 +74,7 @@ class User {
         throw new Error("Không có trường nào được cập nhật");
       }
 
-      updates.push("updated_at = GETDATE()");
+      updates.push("updated_at = SYSUTCDATETIME()");
 
       const query = `
         UPDATE users 
@@ -100,9 +100,9 @@ class User {
         SET 
           name = ISNULL(@full_name, name),
           cccd_status = 'Đã xác minh',
-          cccd_verified_at = GETDATE(),
+          cccd_verified_at = SYSUTCDATETIME(),
           cccd_url = ISNULL(@cccd_url, cccd_url),
-          updated_at = GETDATE()
+          updated_at = SYSUTCDATETIME()
         WHERE user_id = @userId
       `;
 
@@ -185,7 +185,7 @@ class User {
       const query = `
         INSERT INTO users (name, email, password, role, phone, created_at, updated_at, is_banned)
         OUTPUT INSERTED.user_id, INSERTED.name, INSERTED.email, INSERTED.role, INSERTED.is_banned
-        VALUES (@name, @email, @password, @role, @phone, GETDATE(), GETDATE(), 0)
+        VALUES (@name, @email, @password, @role, @phone, SYSUTCDATETIME(), SYSUTCDATETIME(), 0)
       `;
 
       const result = await executeQuery(query, {

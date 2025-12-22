@@ -34,7 +34,7 @@ const getBalance = async (user_id) => {
       FROM WalletTransactions
       WHERE user_id=@user_id
     `);
-    console.log("=== BE SQL RESULT (REAL) ===", result.recordset[0]);
+  console.log("=== BE SQL RESULT (REAL) ===", result.recordset[0]);
   return result.recordset[0].balance;
 };
 
@@ -48,9 +48,9 @@ const getHistory = async (user_id, limit = 20) => {
       SELECT TOP (@limit) *
       FROM WalletTransactions
       WHERE user_id=@user_id
-      ORDER BY created_at DESC
+      ORDER BY id DESC
     `);
-    console.log("=== BE SQL RESULT ===", result.recordset[0]);
+  console.log("=== BE SQL RESULT ===", result.recordset[0]);
   return result.recordset;
 };
 

@@ -1,10 +1,10 @@
 const { connectDB, executeQuery } = require('../config/database');
 
 async function createSystemReportsTable() {
-    try {
-        await connectDB();
+  try {
+    await connectDB();
 
-        const query = `
+    const query = `
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='SystemReports' AND xtype='U')
       BEGIN
         CREATE TABLE SystemReports (
@@ -14,8 +14,8 @@ async function createSystemReportsTable() {
           description NVARCHAR(MAX) NOT NULL,
           image_url NVARCHAR(MAX),
           status NVARCHAR(50) DEFAULT 'Pending',
-          created_at DATETIME DEFAULT GETDATE(),
-          updated_at DATETIME DEFAULT GETDATE(),
+          created_at DATETIME DEFAULT SYSUTCDATETIME(),
+          updated_at DATETIME DEFAULT SYSUTCDATETIME(),
           FOREIGN KEY (user_id) REFERENCES Users(user_id)
         );
         PRINT 'Table SystemReports created successfully';
@@ -26,13 +26,13 @@ async function createSystemReportsTable() {
       END
     `;
 
-        await executeQuery(query);
-        console.log("✅ SystemReports table check/creation completed.");
-        process.exit(0);
-    } catch (error) {
-        console.error("❌ Error creating table:", error);
-        process.exit(1);
-    }
+    await executeQuery(query);
+    console.log("✅ SystemReports table check/creation completed.");
+    process.exit(0);
+  } catch (error) {
+    console.error("❌ Error creating table:", error);
+    process.exit(1);
+  }
 }
 
 createSystemReportsTable();

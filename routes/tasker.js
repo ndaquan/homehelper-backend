@@ -29,6 +29,7 @@ router.get('/by-variant/:variantId', taskerController.getByVariant);
 router.get('/', taskerController.getAll);
 
 // Specific routes with :id parameter (must be before generic /:id)
+router.get("/reputation/:taskerId", taskerController.getTaskerReputation);
 router.get("/:id/services", taskerController.getWithServices);
 
 // Certifications & Upgrade
@@ -115,4 +116,26 @@ router.get('/:id/badges', badgeController.getBadgesForTasker);
 
 // Generic tasker by id - MUST be last to avoid matching other routes
 router.get("/:id", taskerController.getById);
+
+// Lấy thông tin các session chi tiết của booking
+router.get(
+  "/bookings/:bookingId/sessions",
+  authenticateToken,
+  taskerController.getBookingSessions
+);
+
+// Bắt đầu timer checklist
+router.post(
+  "/bookings/:bookingId/tasks/:taskId/timer/start",
+  authenticateToken,
+  taskerController.startChecklistTimer
+);
+
+// Kết thúc timer checklist
+router.post(
+  "/bookings/:bookingId/tasks/:taskId/timer/end",
+  authenticateToken,
+  taskerController.endChecklistTimer
+);
+
 module.exports = router;

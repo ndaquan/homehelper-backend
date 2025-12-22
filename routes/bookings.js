@@ -4,13 +4,37 @@ const {
   authenticateToken,
   requireCustomer,
   requireTasker,
+  requireAdmin
 } = require("../middleware/auth");
 const bookingController = require("../controllers/bookingController");
-const { canRateTasker, listMyBookings, getBookingDetails, updateFinalPrice, getTaskerBookings, getActiveSosJobs, checkSosAvailability } = require("../controllers/bookingController");
+const {
+  canRateTasker,
+  listMyBookings,
+  getBookingDetails,
+  updateFinalPrice,
+  getTaskerBookings,
+  getActiveSosJobs,
+  checkSosAvailability,
+  getTaskerStats,
+  getTaskerEarningsSeries,
+  getTaskerBookingsMonthly,
+  getTaskerSuccessCancel,
+  getTaskerUpcoming,
+  getTaskerOverdue,
+  getTaskerRecentReviews,
+  getTaskerByService,
+} = require("../controllers/bookingController");
 
 const sessionController = require("../controllers/sessionController");
 const { taskPhotosUpload, memoryUpload } = require("../config/cloudinary");
-const { cancelBooking } = require("../controllers/bookingCancelController");
+const bookingCancelController = require("../controllers/bookingCancelController");
+
+router.get(
+  "/admin-list",
+  authenticateToken,
+  requireAdmin,
+  bookingController.getAdminList
+);
 
 // 1️⃣ Tạo Booking từ JobDescription (Customer gửi mô tả)
 router.post(
@@ -27,6 +51,9 @@ router.patch("/:id/status", authenticateToken, requireTasker, bookingController.
 // Check if SOS booking is still available (not taken by someone else)
 router.get("/:id/sos-check", authenticateToken, requireTasker, checkSosAvailability);
 
+// SOS status update (separate function)
+router.patch("/:id/status-sos", authenticateToken, requireTasker, bookingController.updateStatusSOS);
+
 // 5️⃣ Khách hàng xem danh sách Booking của mình
 router.get("/mybookings", authenticateToken, bookingController.listMyBookings);
 
@@ -36,9 +63,6 @@ router.get("/customer/active-sos", authenticateToken, bookingController.getActiv
 // Get active SOS jobs for tasker (only those not expired and matching their service variants)
 router.get("/tasker/active-sos", authenticateToken, requireTasker, getActiveSosJobs);
 
-// Adding authenticateToken to the booking detail route
-router.get("/:id", authenticateToken, bookingController.getBookingDetail);
-
 // 4️⃣ Khách hàng kiểm tra quyền đánh giá Tasker
 router.get(
   "/:taskerId/can-rate",
@@ -46,14 +70,36 @@ router.get(
   bookingController.canRateTasker
 );
 
+
+router.get("/details/:id", authenticateToken, bookingController.getBookingDetails);
+
+// NEW: Endpoint to get session details (similar to tasker's view but for customer)
+router.get(
+  "/:id/sessions",
+  authenticateToken,
+  bookingController.getBookingSessions
+);
+
+
 // // GET /api/bookings/:bookingId - chi tiết booking
-// router.get('/:bookingId', authenticateToken, getBookingDetails);
 
 // PATCH /api/bookings/:bookingId/final-price
 router.patch("/:bookingId/final-price", authenticateToken, updateFinalPrice);
 
 // 6️⃣ Tasker xem danh sách bookings của mình
 router.get("/tasker/my", authenticateToken, requireTasker, getTaskerBookings);
+
+// 7️⃣ Tasker overview stats
+router.get("/tasker/stats", authenticateToken, requireTasker, getTaskerStats);
+
+// Tasker analytics
+router.get("/tasker/earnings-series", authenticateToken, requireTasker, getTaskerEarningsSeries);
+router.get("/tasker/bookings-monthly", authenticateToken, requireTasker, getTaskerBookingsMonthly);
+router.get("/tasker/success-cancel", authenticateToken, requireTasker, getTaskerSuccessCancel);
+router.get("/tasker/upcoming", authenticateToken, requireTasker, getTaskerUpcoming);
+router.get("/tasker/overdue", authenticateToken, requireTasker, getTaskerOverdue);
+router.get("/tasker/reviews", authenticateToken, requireTasker, getTaskerRecentReviews);
+router.get("/tasker/by-service", authenticateToken, requireTasker, getTaskerByService);
 
 // Session-level endpoints for multi-day bookings
 // POST photos: multipart/form-data field 'photos' and body.type='before'|'after'
@@ -79,6 +125,42 @@ router.patch(
 );
 
 // TODO: Implement cancelBooking function in bookingController if needed
-// router.post("/:id/cancel", authenticateToken, bookingController.cancelBooking);
+router.post("/:id/cancel", authenticateToken, bookingCancelController.cancelBooking);
+
+router.patch("/:id/notes", bookingController.updateNotes);
+
+router.get(
+  "/info/:id",
+  authenticateToken,
+  bookingController.getBookingById
+);
+
+router.patch(
+  "/:id/complaint",
+  authenticateToken,
+  requireCustomer,
+  (memoryUpload || taskPhotosUpload).array("images", 10),
+  bookingController.submitComplaint
+);
+
+router.get(
+  "/:id/admin-review",
+  authenticateToken,
+  bookingController.getAdminReview
+);
+
+// Adding authenticateToken to the booking detail route
+router.get("/:id", authenticateToken, bookingController.getBookingDetail);
+
+router.patch("/:id/admin-resolve", authenticateToken, requireAdmin, bookingController.adminResolveComplaint);
+
+router.patch(
+  "/:bookingId/complete", authenticateToken, bookingController.completeJob
+);
+router.patch("/:id/confirm", authenticateToken, bookingController.customerConfirmComplete);
+
+router.patch("/:id/confirm", authenticateToken, bookingController.customerConfirmComplete);
+
+router.post("/:id/sign", authenticateToken, bookingController.signContract);
 
 module.exports = router;

@@ -78,7 +78,7 @@ if (CloudinaryStorage) {
         allowed_formats: ["jpg", "jpeg", "png", "webp"],
         resource_type: "image",
       };
-      },
+    },
   });
 
   taskPhotosUpload = multer({ storage: taskPhotosStorage });
@@ -156,7 +156,7 @@ const handleTaskPhotosUpload = (photoType) => async (req, res) => {
         const photoUrl = file.path; // URL Cloudinary
         await executeQuery(
           `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
-           VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
+           VALUES (@taskId, @photoUrl, @photoType, SYSUTCDATETIME(), @uploadedBy)`,
           {
             taskId,
             photoUrl,
@@ -183,7 +183,7 @@ const handleTaskPhotosUpload = (photoType) => async (req, res) => {
 
                   await executeQuery(
                     `INSERT INTO TaskPhotos (task_id, photo_url, photo_type, uploaded_at, uploaded_by) 
-                   VALUES (@taskId, @photoUrl, @photoType, GETDATE(), @uploadedBy)`,
+                   VALUES (@taskId, @photoUrl, @photoType, SYSUTCDATETIME(), @uploadedBy)`,
                     {
                       taskId,
                       photoUrl: result.secure_url,
@@ -277,7 +277,7 @@ if (CloudinaryStorage) {
         folder: `${CLOUDINARY_FOLDER_BASE}/chat/${userId}/${convId}`,
         allowed_formats: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
         resource_type: 'image',
-        
+
         // TỰ ĐỘNG TẠO 2 BẢN: 1 rõ + 1 bị ẩn danh
         eager: [
           { quality: 'auto', fetch_format: 'auto', width: 1200, crop: 'limit' },
@@ -302,7 +302,7 @@ if (CloudinaryStorage) {
   });
 
 
- 
+
 }
 const getSecureImageUrl = (publicId, options = {}) => {
   if (!publicId) return null;
@@ -340,7 +340,7 @@ module.exports = {
   uploadBufferToCloudinary,
   uploadBadgeIcon,
   generateSignedCertificateUrl,
-  getSecureVideoUrl,getSecureImageUrl ,
+  getSecureVideoUrl, getSecureImageUrl,
   memoryUpload,
   noShowUpload,
   handleTaskPhotosUpload,

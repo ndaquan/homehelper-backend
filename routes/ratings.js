@@ -6,14 +6,23 @@ const {
   getRatingsByTasker,
   replyToRating,
   toggleHelpful,
+  addRatingByBooking,
+  findRatingByBooking
 } = require("../controllers/ratingController");
 const { authenticateToken, authorizeRole } = require("../middleware/auth");
 
+router.post("/booking", authenticateToken, addRatingByBooking);
+
+router.get("/find-by-booking/:bookingId", authenticateToken, findRatingByBooking);
+
 // GET /api/ratings - lấy danh sách ratings
 router.get("/", authenticateToken, getRatings);
+
 router.get("/:id", getRatingsByTasker);
 // POST /api/ratings - thêm rating mới
+
 router.post("/", authenticateToken, addRating);
+
 router.post(
   "/:rating_id/reply",
   authenticateToken,

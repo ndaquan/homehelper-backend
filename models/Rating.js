@@ -1,6 +1,19 @@
 // models/Rating.js
 const { executeQuery } = require("../config/database");
-const { processReview } = require("../config/gemini.service"); 
+const { processReview } = require("../config/gemini.service");
+const ImageEncryption = require("../utils/imageEncryption");
+
+const safeDecrypt = (value) => {
+  try {
+    if (!value) return value;
+    if (ImageEncryption && typeof ImageEncryption.decrypt === 'function') {
+      return ImageEncryption.decrypt(value);
+    }
+    return value;
+  } catch (_) {
+    return value;
+  }
+};
 
 class Rating {
   static async getByTaskerId(taskerId, currentUserId = null) {
@@ -17,7 +30,10 @@ class Rating {
       r.staff_reply_date,
       r.helpful,   
       s.name AS service_name,
-      0 AS userLiked
+      u.avatar_url AS avatar,
+      0 AS userLiked,
+      (SELECT TOP 1 photo_url FROM TaskPhotos tp WHERE tp.booking_id = r.booking_id AND tp.photo_type = 'after') AS booking_image,
+      (SELECT TOP 1 description FROM Tasks t WHERE t.booking_id = r.booking_id) AS task_description
     FROM Ratings r
     JOIN Users u ON r.reviewer_id = u.user_id
     JOIN Bookings b ON r.booking_id = b.booking_id
@@ -34,6 +50,7 @@ class Rating {
       reviews: rows.map((r) => ({
         id: r.rating_id,
         name: r.reviewer_name || "Ẩn danh",
+        reviewer_avatar: safeDecrypt(r.avatar),
         reviewee_id: r.reviewee_id,
         rating: r.rating || 0,
         text: r.text || "",
@@ -42,14 +59,16 @@ class Rating {
         staff_reply_date: r.staff_reply_date || null,
         helpful: r.helpful || 0,
         userLiked: r.userLiked === 1,
+        booking_image: r.booking_image || null,
+        task_description: r.task_description || ""
       })),
       total: rows.length,
       average: rows.length
         ? Number(
-            (rows.reduce((sum, r) => sum + r.rating, 0) / rows.length).toFixed(
-              1
-            )
+          (rows.reduce((sum, r) => sum + r.rating, 0) / rows.length).toFixed(
+            1
           )
+        )
         : 0,
       ratingsCount: rows.reduce(
         (acc, r) => {
@@ -71,16 +90,17 @@ class Rating {
     try {
       const reviewCheck = await processReview(comment, rating);
 
+
       if (!reviewCheck.allow) {
         throw new Error(
-          "Bình luận chứa từ ngữ không phù hợp. Không thể đăng đánh giá."
+          "Bình luận chứa từ ngữ không phù hợp. Không thể đăng đánh giá. Vui lòng chỉnh sửa lại."
         );
       }
 
       const query = `
       INSERT INTO Ratings (booking_id, reviewer_id, reviewee_id, rating, comment, status, created_at)
       OUTPUT INSERTED.*
-      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE())
+      VALUES (@param1, @param2, @param3, @param4, @param5, @param6, SYSUTCDATETIME())
     `;
       const params = [
         booking_id,
@@ -100,18 +120,18 @@ class Rating {
       );
       const reviewer_name = reviewerNameResult.recordset[0]?.name || null;
 
-      if (reviewCheck.status === 1) {
-        const updateQuery = `
-        UPDATE Taskers
-        SET rating = (
-          SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
-          FROM Ratings
-          WHERE reviewee_id = @param1 AND status = 1
-        )
-        WHERE tasker_id = @param1
-      `;
-        await executeQuery(updateQuery, [reviewee_id]);
-      }
+      // if (reviewCheck.status === 1) {
+      //   const updateQuery = `
+      //   UPDATE Taskers
+      //   SET rating = (
+      //     SELECT CAST(AVG(CAST(rating AS FLOAT)) AS DECIMAL(3,2))
+      //     FROM Ratings
+      //     WHERE reviewee_id = @param1 AND status = 1
+      //   )
+      //   WHERE tasker_id = @param1
+      // `;
+      //   await executeQuery(updateQuery, [reviewee_id]);
+      // }
 
       return {
         ...newRating,
@@ -146,6 +166,7 @@ class Rating {
         r.status, 
         r.created_at,
         u.name AS reviewer_name,
+        u.avatar_url AS reviewer_avatar,
         uu.name AS reviewee_name,
         s.name AS service_name
       FROM Ratings r
@@ -162,7 +183,7 @@ class Rating {
     const query = `
     UPDATE Ratings 
     SET staff_reply = @param1,
-        staff_reply_date = GETDATE()
+        staff_reply_date = SYSUTCDATETIME()
     WHERE rating_id = @param2
   `;
     const result = await executeQuery(query, [reply, rating_id]);

@@ -23,7 +23,7 @@ const {
 } = process.env;
 
 const CREATE_PATH = '/v2/gateway/api/create';
-const BASE_ENDPOINT = MOMO_ENDPOINT?.replace(/\/+$/,'') || 'https://payment.momo.vn';
+const BASE_ENDPOINT = MOMO_ENDPOINT?.replace(/\/+$/, '') || 'https://payment.momo.vn';
 
 const hmacSHA256 = (raw, secret) =>
   crypto.createHmac('sha256', secret).update(raw).digest('hex');
@@ -85,6 +85,9 @@ exports.createMomoPayment = async (req, res) => {
     const orderId = `NAPVI_${user_id}_${Date.now()}`;
     const requestId = `REQ_${Date.now()}`;
 
+    // BỎ CHẶN: Cho phép tạo nhiều đơn pending (vì orderId đã có timestamp là duy nhất).
+    // Việc này giúp user nếu lỡ đóng tab cũ có thể tạo link mới ngay lập tức.
+    /*
     const existing = await Transaction.getByUserPending(user_id);
     if (existing) {
       return res.status(409).json({
@@ -96,6 +99,7 @@ exports.createMomoPayment = async (req, res) => {
         }
       });
     }
+    */
 
     // Lưu pending trước để không mất dấu giao dịch
     await Transaction.insertPending({
@@ -140,7 +144,7 @@ exports.createMomoPayment = async (req, res) => {
     });
   } catch (err) {
     const status = err.response?.status;
-    const data   = err.response?.data;   // ← body từ MoMo (có resultCode/message)
+    const data = err.response?.data;   // ← body từ MoMo (có resultCode/message)
     console.error('[MoMo create][ERROR]', status, data || err.message);
 
     return res.status(500).json({
@@ -180,24 +184,29 @@ exports.momoIpn = async (req, res) => {
       return res.status(200).json({ resultCode: 0, message: 'acknowledged' });
     }
 
-    if (Number(data.resultCode) === 0) {
+    if (Number(resultCode) === 0) {
+      // ✅ CHUẨN HÓA SỐ TIỀN: Chia 1000 để khớp với UI (Ví dụ: nạp 10.000đ -> lưu 10)
+      const uiAmount = Math.floor(Number(amount) / 1000);
+      console.log(`[MoMo IPN] Normalized amount: ${amount} VND -> ${uiAmount}k`);
+
       const ok = await Transaction.markSuccess({
-        order_id: data.orderId,
-        trans_id: String(data.transId || ''),
-        pay_type: data.payType || null,
-        message: data.message || null,
-        result_code: 0,
-        signature: data.signature || null
+        order_id: orderId,
+        trans_id: String(transId || ''),
+        pay_type: payType || 'momo',
+        message: message || 'Success',
+        result_code: resultCode,
+        signature: signature || null
       });
+
       if (ok) {
         // Ghi lịch sử ví
         await WalletTx.addTransaction({
           user_id: tx.user_id,
-          amount: tx.amount,
+          amount: uiAmount, // Lưu giá trị đã chia
           type: 'credit',
           purpose: 'topup',
-          related_id: tx.order_id,
-          note: 'Nạp tiền MoMo'
+          related_id: orderId,
+          note: `Nạp tiền MoMo (Số tiền nạp: ${amount}đ)`
         });
       }
     } else {
@@ -219,6 +228,7 @@ exports.momoIpn = async (req, res) => {
 
 // POST /api/momo/dev/confirm  (CHỈ DEV) — dùng khi chưa có IPN public
 exports.devConfirm = async (req, res) => {
+  // ... (giữ nguyên logic cũ)
   try {
     if (NODE_ENV === 'production') return res.status(403).json({ error: 'forbidden' });
     const { orderId } = req.body;
@@ -250,5 +260,100 @@ exports.devConfirm = async (req, res) => {
     return res.json({ ok: true });
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /api/momo/order/:orderId
+exports.checkOrderStatus = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    let tx = await Transaction.getByOrderId(orderId);
+
+    if (!tx) return res.status(404).json({ error: 'Giao dịch không tồn tại' });
+
+    // Nếu đơn đã thành công hoặc thất bại rồi thì trả về luôn
+    if (tx.status !== 'pending') {
+      // For already processed transactions, return the stored amount (which should be uiAmount if processed by IPN/Query)
+      // If the original tx.amount is in VND, we might need to normalize it here too for consistency.
+      // Assuming tx.amount is already in the desired UI format if status is not pending.
+      return res.json({ status: tx.status, amount: Math.floor(Number(tx.amount) / 1000) });
+    }
+
+    // Nếu vẫn đang pending, chủ động gọi sang MoMo để hỏi (Query Status)
+    const requestId = `QUERY_${Date.now()}`;
+
+    // Tạo chữ ký cho yêu cầu kiểm tra trạng thái (Query Status MoMo v2)
+    // rawSignature: accessKey=$accessKey&orderId=$orderId&partnerCode=$partnerCode&requestId=$requestId
+    const rawSignature = `accessKey=${MOMO_ACCESS_KEY}&orderId=${orderId}&partnerCode=${MOMO_PARTNER_CODE}&requestId=${requestId}`;
+    const signature = crypto.createHmac('sha256', MOMO_SECRET_KEY).update(rawSignature).digest('hex');
+
+    const queryBody = {
+      partnerCode: MOMO_PARTNER_CODE,
+      requestId,
+      orderId,
+      signature
+    };
+
+    console.log('[MoMo Query] Body:', queryBody);
+
+    const momoRes = await axios.post(
+      `${BASE_ENDPOINT}/v2/gateway/api/query`,
+      queryBody,
+      { timeout: 10000 }
+    );
+
+    const momoData = momoRes.data;
+    console.log('[MoMo Query Status Response]', orderId, 'resultCode:', momoData.resultCode, 'message:', momoData.message);
+
+    // Nếu MoMo báo thành công (resultCode = 0)
+    if (Number(momoData.resultCode) === 0) {
+      const realAmount = Number(momoData.amount || tx.amount);
+      const uiAmount = Math.floor(realAmount / 1000);
+      console.log(`[MoMo Sync] Normalized amount: ${realAmount} VND -> ${uiAmount}k`);
+
+      // Cập nhật Database
+      const ok = await Transaction.markSuccess({
+        order_id: orderId,
+        trans_id: String(momoData.transId || ''),
+        pay_type: momoData.payType || 'momo',
+        message: momoData.message || 'Sync from Query API',
+        result_code: 0,
+        signature: momoData.signature || null
+      });
+
+      if (ok) {
+        console.log('[MoMo Sync] Update DB Success, adding wallet tx...');
+        await WalletTx.addTransaction({
+          user_id: tx.user_id,
+          amount: uiAmount, // Lưu giá trị đã chia
+          type: 'credit',
+          purpose: 'topup',
+          related_id: orderId,
+          note: `Nạp tiền MoMo (${realAmount}đ)`
+        });
+        return res.json({ status: 'success', amount: uiAmount });
+      } else {
+        console.log('[MoMo Sync] DB already updated or update failed');
+        // Nếu không update được (có thể do đã success trước đó bởi IPN), 
+        // lấy lại trạng thái mới nhất từ DB
+        const updatedTx = await Transaction.getByOrderId(orderId);
+        return res.json({ status: updatedTx.status, amount: Math.floor(Number(updatedTx.amount) / 1000) });
+      }
+    } else if ([1000, 9000, 7000].includes(Number(momoData.resultCode))) {
+      // Các mã này nghĩa là vẫn đang chờ thanh toán
+      return res.json({ status: 'pending', amount: tx.amount });
+    } else {
+      // Thất bại hoặc lỗi khác
+      console.log('[MoMo Sync] Transaction failed according to MoMo');
+      await Transaction.markFailed({
+        order_id: orderId,
+        message: momoData.message || 'failed',
+        result_code: Number(momoData.resultCode)
+      });
+      return res.json({ status: 'failed', amount: tx.amount });
+    }
+  } catch (err) {
+    console.error('[checkOrderStatus][Error]', err.response?.data || err.message);
+    res.status(500).json({ error: 'Lỗi kiểm tra trạng thái đơn hàng' });
   }
 };

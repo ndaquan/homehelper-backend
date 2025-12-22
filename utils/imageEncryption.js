@@ -32,7 +32,8 @@ class ImageEncryption {
 
         try {
             const parts = encryptedText.split(':');
-            if (parts.length !== 2) return encryptedText; // Not encrypted format
+            // An encrypted string must have exactly 2 parts, and the first part (IV) must be 32 hex chars (16 bytes)
+            if (parts.length !== 2 || parts[0].length !== 32) return encryptedText;
 
             const iv = Buffer.from(parts[0], 'hex');
             const encrypted = parts[1];

@@ -111,15 +111,15 @@ exports.approveEvidence = async (req, res) => {
     );
     const booking = b.recordset[0];
 
-    // --- RULE R6: Tasker nhận 100% (no_show)
+    // --- RULE R6: Tasker nhận 100% số tiền khách đã trả (Không trừ phí hệ thống)
     const policy = calculateRefundPolicy(booking, "no_show");
-    const total = policy.total;   // final_price hoặc expected_price
-    const compensationAmount = Math.round(total * (policy.compensationPercent / 100));
+    const actualPaid = Number(booking.paid_amount || 0);
+    const compensationAmount = actualPaid;
 
     /// Update Evidence
     await executeQuery(`
       UPDATE EvidenceReview
-      SET status = N'approved', admin_id=@admin_id, reviewed_at=GETDATE()
+      SET status = N'approved', admin_id=@admin_id, reviewed_at=SYSUTCDATETIME()
       WHERE id=@id
     `, { id, admin_id });
 
@@ -134,7 +134,7 @@ exports.approveEvidence = async (req, res) => {
     await executeQuery(`
       INSERT INTO WalletTransactions
       (user_id, amount, type, purpose, related_id, note, created_at)
-      VALUES (@uid, @amount, N'compensation', N'evidence_approved', @bid, @note, GETDATE())
+      VALUES (@uid, @amount, N'compensation', N'evidence_approved', @bid, @note, SYSUTCDATETIME())
     `, {
       uid: booking.tasker_id,
       amount: compensationAmount,
@@ -168,15 +168,36 @@ exports.rejectEvidence = async (req, res) => {
     const b = await executeQuery(`SELECT * FROM Bookings WHERE booking_id = @bid`, { bid: review.booking_id });
     const booking = b.recordset[0];
 
-    // --- RULE R8: refund 100% for customer
+    const alreadyRefunded = await executeQuery(`
+      SELECT TOP 1 1
+      FROM WalletTransactions
+      WHERE purpose = N'evidence_rejected' AND related_id = @bid
+    `, { bid: booking.booking_id });
+
+    if (alreadyRefunded.recordset.length) {
+      return res.json({ success: false, message: "Booking đã được hoàn tiền do reject trước đó." });
+    }
+
+    // 🚫 Chống double theo trạng thái (query trạng thái hiện tại)
+    const sttRes = await executeQuery(
+      `SELECT status FROM Bookings WHERE booking_id = @bid`,
+      { bid: booking.booking_id }
+    );
+    const currentStatus = sttRes.recordset[0]?.status;
+    if (currentStatus === 'Hủy' || currentStatus === 'Báo cáo bị từ chối') {
+      return res.json({ success: false, message: "Booking đã được xử lý refund trước đó." });
+    }
+
+
+    // --- RULE R8: Hoàn 100% số tiền khách đã trả (Sử dụng paid_amount)
     const policy = calculateRefundPolicy(booking, "evidence_rejected");
-    const total = policy.total;
-    const refundAmount = Math.round(total * (policy.refundPercent / 100));
+    const actualPaid = Number(booking.paid_amount || 0);
+    const refundAmount = actualPaid;
 
     // Update evidence
     await executeQuery(`
       UPDATE EvidenceReview
-      SET status = N'rejected', admin_id=@admin_id, reviewed_at=GETDATE()
+      SET status = N'rejected', admin_id=@admin_id, reviewed_at=SYSUTCDATETIME()
       WHERE id=@id
     `, { id, admin_id });
 
@@ -187,11 +208,28 @@ exports.rejectEvidence = async (req, res) => {
       WHERE booking_id=@bid
     `, { bid: booking.booking_id });
 
+    // 3) Trả lại voucher đã dùng
+    const usedVoucher = await executeQuery(`
+      SELECT TOP 1 voucher_id
+      FROM Vouchers
+      WHERE source_booking_id = @bid AND used = 1
+    `, { bid: booking.booking_id });
+
+    if (usedVoucher.recordset.length > 0) {
+      await executeQuery(`
+        UPDATE Vouchers
+        SET used = 0
+        WHERE voucher_id = @vid
+      `, { vid: usedVoucher.recordset[0].voucher_id });
+
+      console.log("🎟️ Đã hoàn trả voucher đã sử dụng:", usedVoucher.recordset[0].voucher_id);
+    }
+
     // Refund → customer
     await executeQuery(`
       INSERT INTO WalletTransactions 
       (user_id, amount, type, purpose, related_id, note, created_at)
-      VALUES (@uid, @amount, N'refund', N'evidence_rejected', @bid, @note, GETDATE())
+      VALUES (@uid, @amount, N'refund', N'evidence_rejected', @bid, @note, SYSUTCDATETIME())
     `, {
       uid: booking.customer_id,
       amount: refundAmount,
@@ -201,6 +239,24 @@ exports.rejectEvidence = async (req, res) => {
 
     // Trừ 30 uy tín
     await updateReliabilityScore(booking.tasker_id, -30);
+
+    try {
+      console.log("🔥 Bắt đầu INSERT voucher...");
+      await executeQuery(`
+        INSERT INTO Vouchers
+        (user_id, type, discount, used, created_at, source_booking_id)
+        VALUES
+        (@uid, 'compensation', 0.1, 0, SYSUTCDATETIME(), @bid)
+      `, {
+        uid: booking.customer_id,
+        bid: booking.booking_id
+      });
+
+      console.log(`🎟️ Đã tạo voucher cho khách ${booking.customer_id}`);
+    }
+    catch (voucherErr) {
+      console.error("❌ LỖI INSERT VOUCHER:", voucherErr);
+    }
 
     res.json({
       success: true,

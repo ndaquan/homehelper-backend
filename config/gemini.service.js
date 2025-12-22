@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-// Model gốc - đang hoạt động với các dịch vụ khác
+const GEMINI_API_KEY1 = process.env.GEMINI_API_KEY1;
 const GEMINI_API_URL =
   "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent";
 
@@ -52,8 +52,7 @@ async function moderateContent(text) {
   } catch (error) {
     fs.appendFileSync(
       logFile,
-      `\n[${new Date().toISOString()}] ERROR: ${
-        error.message
+      `\n[${new Date().toISOString()}] ERROR: ${error.message
       }\nRESPONSE: ${JSON.stringify(error.response?.data)}\n`
     );
     return false;
@@ -149,9 +148,17 @@ const os = require("os");
 const { v4: uuidv4 } = require("uuid");
 let pdf2imgAvailable = false;
 let PDFImage;
+let sharpAvailable = false;
+let Sharp;
 try {
   PDFImage = require("pdf-image").PDFImage; // optional dependency
   pdf2imgAvailable = true;
+} catch (_) {
+  /* optional */
+}
+try {
+  Sharp = require("sharp");
+  sharpAvailable = true;
 } catch (_) {
   /* optional */
 }
@@ -179,6 +186,66 @@ async function convertPdfFirstPageToPng(pdfPath) {
   });
   const imagePath = await pdfImage.convertPage(0);
   return imagePath;
+}
+
+// Optimize image: resize and compress before base64
+async function optimizeImage(imagePath) {
+  // Default: read original
+  let buffer = fs.readFileSync(imagePath);
+  let mime = "image/png";
+  const ext = path.extname(imagePath).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") mime = "image/jpeg";
+  else if (ext === ".webp") mime = "image/webp";
+
+  if (sharpAvailable) {
+    try {
+      // Progressive downsizing to keep request payload small and stable
+      const targets = [
+        { width: 1280, quality: 80 },
+        { width: 1024, quality: 75 },
+        { width: 800, quality: 70 },
+      ];
+      const MAX_BYTES = 1_500_000; // ~1.5MB cap
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i];
+        buffer = await Sharp(imagePath)
+          .rotate()
+          .resize({ width: t.width, height: t.width, fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: t.quality, mozjpeg: true })
+          .toBuffer();
+        mime = "image/jpeg";
+        if (buffer.length <= MAX_BYTES) break;
+      }
+    } catch (_) {
+      // fallback to original buffer and mime
+    }
+  }
+
+  return { buffer, mime };
+}
+
+// Call Gemini with retry/backoff to mitigate transient 503s
+async function callGeminiGenerateContent(body) {
+  const url = `${GEMINI_API_URL}?key=${GEMINI_API_KEY1}`;
+  const headers = { "Content-Type": "application/json" };
+  const maxAttempts = 3;
+  let attempt = 0;
+  let lastErr;
+  while (attempt < maxAttempts) {
+    try {
+      const response = await axios2.post(url, body, { headers, timeout: 25000 });
+      return response.data;
+    } catch (err) {
+      lastErr = err;
+      const status = err?.response?.status;
+      const shouldRetry = !status || (status >= 500 && status < 600);
+      attempt++;
+      if (!shouldRetry || attempt >= maxAttempts) break;
+      const backoffMs = 1000 * Math.pow(2, attempt - 1); // 1s, 2s
+      await new Promise((r) => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr || new Error("Gemini request failed");
 }
 
 function extractJSON(str) {
@@ -301,7 +368,7 @@ function normalizeDate(raw) {
 }
 
 async function extractCertificateFromUrl(certUrl) {
-  if (!GEMINI_API_KEY) throw new Error("Missing Gemini API key");
+  if (!GEMINI_API_KEY1) throw new Error("Missing Gemini API key");
   const local = await downloadToTemp(certUrl);
   let imagePath = local;
   if (/\.pdf$/i.test(local)) {
@@ -311,7 +378,7 @@ async function extractCertificateFromUrl(certUrl) {
       throw new Error("PDF convert failed: " + e.message);
     }
   }
-  const buffer = fs.readFileSync(imagePath);
+  const { buffer, mime } = await optimizeImage(imagePath);
   const b64 = buffer.toString("base64");
   const prompt = `
 Bạn là hệ thống TRÍCH XUẤT THÔNG TIN CHỨNG CHỈ song ngữ (Việt / Anh), có nhiệm vụ nhận diện, hiểu ngữ cảnh và chuẩn hoá dữ liệu chứng chỉ thành JSON chuẩn. 
@@ -348,16 +415,12 @@ YÊU CẦU:
         role: "user",
         parts: [
           { text: prompt },
-          { inline_data: { mime_type: "image/png", data: b64 } },
+          { inline_data: { mime_type: mime, data: b64 } },
         ],
       },
     ],
   };
-  const { data } = await axios2.post(
-    `${GEMINI_API_URL}?key=${GEMINI_API_KEY}`,
-    body,
-    { headers: { "Content-Type": "application/json" } }
-  );
+  const data = await callGeminiGenerateContent(body);
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
   const json = extractJSON(raw) || {};
   let iso = json.issued_date_iso || normalizeDate(json.issued_date_raw);
@@ -427,9 +490,8 @@ YÊU CẦU:
       genericPatterns.some((p) => p.test(parsed.cert_name.trim()))
     ) {
       if (programVi) {
-        parsed.cert_name = `Chứng chỉ đào tạo – ${programVi}${
-          programEn ? ` (${programEn})` : ""
-        }`;
+        parsed.cert_name = `Chứng chỉ đào tạo – ${programVi}${programEn ? ` (${programEn})` : ""
+          }`;
       }
     }
   } catch (_) {
@@ -444,11 +506,9 @@ YÊU CẦU:
       const logEntry = `\n[${new Date().toISOString()}]\nURL: ${certUrl}\nRAW(JSON?): ${raw.substring(
         0,
         2000
-      )}\nissued_date_raw(JSON): ${
-        json.issued_date_raw
-      }\nHeuristic dateLine: ${dateLineTried}\nFinal ISO: ${
-        parsed.issued_date_iso
-      }\nParsed Name: ${parsed.cert_name}\n`;
+      )}\nissued_date_raw(JSON): ${json.issued_date_raw
+        }\nHeuristic dateLine: ${dateLineTried}\nFinal ISO: ${parsed.issued_date_iso
+        }\nParsed Name: ${parsed.cert_name}\n`;
       fs.appendFileSync(logFile, logEntry);
       console.log("🧪 CERT_AI_LOG:", {
         certUrl,
@@ -652,27 +712,6 @@ Bạn là trợ lý AI thân thiện của HomeHelper - nền tảng kết nối
 - Hủy trước <4 giờ: Không hoàn tiền
 - Tasker hủy đơn: Khách được hoàn 100%
 
-=== CHƯƠNG TRÌNH THÀNH VIÊN ===
-🥉 BRONZE (100 điểm):
-   - Giảm 5% dịch vụ
-   - Ưu tiên đặt lịch
-   - Mẹo dọn dẹp hàng tháng
-
-🥈 SILVER (500 điểm):
-   - Giảm 10% dịch vụ
-   - Miễn phí 1 lần deep cleaning
-   - Nâng cấp vật tư premium
-
-🥇 GOLD (1,000 điểm):
-   - Giảm 15% dịch vụ
-   - Miễn phí dịch vụ hàng tháng
-   - Tất cả vật tư premium
-
-💎 PLATINUM (2,000 điểm):
-   - Giảm 20% dịch vụ
-   - Đãi ngộ VIP
-   - Gói dịch vụ tùy chỉnh
-   - Tasker riêng được chỉ định
 
 === HỆ THỐNG HUY HIỆU TASKER ===
 - 🏆 Hoàn thành nhiều công việc
@@ -801,7 +840,7 @@ async function chatbotResponse(userMessage, conversationHistory = []) {
   } catch (error) {
     console.error("🔴 Chatbot API error:", error.message);
     console.error("🔴 Error details:", error.response?.data || error);
-    
+
     fs.appendFileSync(
       logFile,
       `\n[${new Date().toISOString()}] ERROR: ${error.message}\nUSER_MSG: ${trimmedMessage}\nDETAILS: ${JSON.stringify(error.response?.data || {})}\n`

@@ -23,6 +23,14 @@ class BookingCancelController {
                 return res.status(404).json({ success: false, message: "Không tìm thấy booking" });
             }
 
+            // 🛡️ Check Ownership
+            if (req.user.role === 'Tasker' && booking.tasker_id !== req.user.userId) {
+                return res.status(403).json({ success: false, message: "Bạn không có quyền hủy booking này." });
+            }
+            if (req.user.role === 'Customer' && booking.customer_id !== req.user.userId) {
+                return res.status(403).json({ success: false, message: "Bạn không có quyền hủy booking này." });
+            }
+
             // Nếu đã hủy / hoàn thành thì không cho hủy lại
             if (booking.status === "Hủy" || booking.status === "Hoàn thành") {
                 return res.status(400).json({ success: false, message: `Booking hiện ở trạng thái '${booking.status}', không thể hủy.` });
@@ -53,7 +61,7 @@ class BookingCancelController {
                 if (refundAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                        VALUES (@param1, @param2, N'refund', N'booking_cancel', @param3, @param4, GETDATE())`,
+                        VALUES (@param1, @param2, N'refund', N'booking_cancel', @param3, @param4, SYSUTCDATETIME())`,
                         [booking.customer_id, refundAmount, bookingId, `[${policy.ruleCode}] ${policy.note}`]
                     );
                 }
@@ -62,7 +70,7 @@ class BookingCancelController {
                 if (compensationAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                        VALUES (@param1, @param2, N'compensation', N'booking_cancel', @param3, @param4, GETDATE())`,
+                        VALUES (@param1, @param2, N'compensation', N'booking_cancel', @param3, @param4, SYSUTCDATETIME())`,
                         [booking.tasker_id, compensationAmount, bookingId, `[${policy.ruleCode}] ${policy.note}`]
                     );
                 }
@@ -72,7 +80,7 @@ class BookingCancelController {
             if (cancelledBy === "system" || cancelledBy === "no_show") {
                 await executeQuery(
                     `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                    VALUES (@param1, 0, N'system', @param2, @param3, @param4, GETDATE())`,
+                    VALUES (@param1, 0, N'system', @param2, @param3, @param4, SYSUTCDATETIME())`,
                     [
                         booking.customer_id,
                         cancelledBy === "system" ? "system_cancel" : "no_show",
@@ -83,28 +91,67 @@ class BookingCancelController {
             }
 
             if (cancelledBy === "tasker" || cancelledBy === "tasker_late") {
-                // --- 1) Nếu khách chưa thanh toán: KHÔNG phạt ---
-                if (!alreadyPaid) {
+                // --- 1) Nếu khách chưa thanh toán: KHÔNG phạt (trừ khi là SOS) ---
+                if (!alreadyPaid && booking.type !== 'SOS') {
                     console.log("Tasker hủy nhưng khách chưa thanh toán → Không phạt.");
                     return;
                 }
 
                 // ⭐ Trừ điểm uy tín
-                let penalty = cancelledBy === "tasker" ? -10 : -20;
+                // Nếu là SOS thì luôn trừ 30 điểm
+                let penalty = (booking.type === 'SOS') ? -30 : (cancelledBy === "tasker" ? -10 : -20);
                 await updateReliabilityScore(booking.tasker_id, penalty);
 
-                // ⭐ Refund FULL cho khách
-                const refundAmount = booking.final_price || booking.expected_price || 0;
+                // ⭐ Refund FULL cho khách (Dùng paid_amount làm gốc)
+                const refundAmount = Number(booking.paid_amount || 0);
 
                 if (refundAmount > 0) {
                     await executeQuery(
                         `INSERT INTO WalletTransactions (user_id, amount, type, purpose, related_id, note, created_at)
-                        VALUES (@param1, @param2, N'refund', N'tasker_cancel', @param3, N'Tasker hủy đơn', GETDATE())`,
+                        VALUES (@param1, @param2, N'refund', N'tasker_cancel', @param3, N'Tasker hủy đơn', SYSUTCDATETIME())`,
                         [booking.customer_id, refundAmount, bookingId]
                     );
                 }
+                console.log(">>> [VOUCHER DEBUG] Bắt đầu tạo voucher cho booking:", booking.booking_id);
+                console.log(">>> [VOUCHER DEBUG] booking.customer_id =", booking.customer_id);
+                console.log(">>> [VOUCHER DEBUG] booking.tasker_id =", booking.tasker_id);
+
+                try {
+                    console.log(">>> [VOUCHER DEBUG] Chuẩn bị INSERT...");
+
+                    await executeQuery(`
+                        INSERT INTO Vouchers
+                        (user_id, type, discount, used, created_at, source_booking_id)
+                        VALUES
+                        (@uid, 'compensation', 0.1, 0, SYSUTCDATETIME(), @bid)
+                    `, {
+                        uid: booking.customer_id,
+                        bid: booking.booking_id
+                    });
+
+                    console.log("🎟️ [VOUCHER SUCCESS] Đã tạo voucher 10% do tasker hủy cho khách:", booking.customer_id);
+
+                } catch (err) {
+                    console.error("❌ [VOUCHER ERROR] Lỗi khi tạo voucher:", err);
+                }
             }
 
+
+            // 6️⃣ Emit booking cancellation notification
+            try {
+                const io = req.app.get('io');
+                await notifyBookingEvent(io, {
+                    action: 'cancelled',
+                    booking_id: booking.booking_id,
+                    customer_id: booking.customer_id,
+                    tasker_id: booking.tasker_id,
+                    cancelledBy,
+                    refundAmount,
+                    compensationAmount
+                });
+            } catch (notifyErr) {
+                console.warn('[booking.cancel] notifyBookingEvent failed:', notifyErr?.message || notifyErr);
+            }
 
             return res.json({
                 success: true,

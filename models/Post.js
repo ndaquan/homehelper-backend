@@ -32,7 +32,7 @@ class Post {
       INSERT INTO Posts (
         user_id, title, content, status, related_booking_id, photo_urls,
         created_at, updated_at
-      ) VALUES (@param1, @param2, @param3, @param4, @param5, @param6, GETDATE(), GETDATE());
+      ) VALUES (@param1, @param2, @param3, @param4, @param5, @param6, SYSUTCDATETIME(), SYSUTCDATETIME());
       
       SELECT SCOPE_IDENTITY() AS post_id;
     `;
@@ -59,7 +59,7 @@ class Post {
   // Tìm bài đăng theo ID
   static async findById(id) {
     const query = `
-    SELECT p.*, u.name as author_name, u.email as author_email
+    SELECT p.*, u.name as author_name, u.email as author_email, u.avatar_url as author_avatar_url
     FROM Posts p
     LEFT JOIN Users u ON p.user_id = u.user_id
     WHERE p.post_id = @param1
@@ -74,6 +74,7 @@ class Post {
       // Gán thông tin tác giả vào object trả về
       post.author_name = row.author_name || "Ẩn danh";
       post.author_email = row.author_email || "";
+      post.author_avatar_url = row.author_avatar_url;
       return post;
     } catch (error) {
       throw new Error(`Error finding post: ${error.message}`);
@@ -105,6 +106,7 @@ class Post {
         p.related_booking_id,
         u.name as author_name,
         u.email as author_email,
+        u.avatar_url as author_avatar_url,
         (SELECT COUNT(*) FROM PostLikes pl WHERE pl.post_id = p.post_id) as likes_count,
         (SELECT COUNT(*) FROM Comments c WHERE c.post_id = p.post_id AND c.parent_comment_id IS NULL) as comments_count
       FROM Posts p
@@ -155,10 +157,6 @@ class Post {
       params.push(user_id);
     }
 
-    // Group by post_id
-    query +=
-      " GROUP BY p.post_id, p.title, p.content, p.post_date, p.status, p.photo_urls, p.related_booking_id, p.likes, p.comments_count, p.created_at, p.updated_at, p.user_id, u.name, u.email";
-
     // Sorting
     query += ` ORDER BY p.${sortBy} ${sortOrder}`;
     query += ` OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
@@ -172,6 +170,8 @@ class Post {
         post.comments_count = row.comments_count;
         post.author_name = row.author_name || "Ẩn danh";
         post.author_email = row.author_email || "";
+        post.author_avatar_url = row.author_avatar_url;
+
         return post;
       });
 
@@ -324,8 +324,8 @@ class Post {
       throw new Error("No valid fields to update");
     }
 
-    updates.push("updated_at = GETDATE()");
-  values.push(this.post_id);
+    updates.push("updated_at = SYSUTCDATETIME()");
+    values.push(this.post_id);
 
     const query = `UPDATE Posts SET ${updates.join(
       ", "
@@ -377,7 +377,7 @@ class Post {
     } catch (error) {
       try {
         await tx.rollback();
-      } catch (e) {}
+      } catch (e) { }
       throw new Error(`Error deleting post: ${error.message}`);
     }
   }
@@ -471,7 +471,7 @@ class Post {
 
     const query = `
     UPDATE Posts
-    SET status = @param1, updated_at = GETDATE()
+    SET status = @param1, updated_at = SYSUTCDATETIME()
     WHERE post_id = @param2
   `;
     await executeQuery(query, [mapped, post_id]);

@@ -4,12 +4,12 @@ require("dotenv").config();
 // Cấu hình kết nối SQL Server
 const dbConfig = {
   server: process.env.DB_SERVER || "localhost",
-  database: process.env.DB_DATABASE || "HomeHelperDB",
+  database: process.env.DB_DATABASE || "HomeHelperDB42",
   user: process.env.DB_USER || "sa",
   password: process.env.DB_PASSWORD || "123456",
   port: parseInt(process.env.DB_PORT || "1433", 10),
   options: {
-    encrypt: false, // Nếu dùng Azure thì để true
+    encrypt: true,  // Nếu dùng Azure thì để tru
     trustServerCertificate: true, // Cho phép self-signed cert
   },
   pool: {
@@ -27,7 +27,7 @@ function createPool() {
   if (pool) {
     try {
       pool.close();
-    } catch (e) {}
+    } catch (e) { }
   }
   pool = new sql.ConnectionPool(dbConfig);
   pool.on("error", (err) => console.error("Database connection error:", err));
@@ -98,9 +98,15 @@ async function executeStoredProcedure(procName, params = []) {
     const request = pool.request();
 
     // Bind parameters nếu có
-    params.forEach((param, index) => {
-      request.input(`param${index + 1}`, param);
-    });
+    if (Array.isArray(params)) {
+      params.forEach((param, index) => {
+        if (typeof param === "string") {
+          request.input(`param${index + 1}`, sql.NVarChar, param.trim());
+        } else {
+          request.input(`param${index + 1}`, param);
+        }
+      });
+    }
 
     const result = await request.execute(procName);
     return result;

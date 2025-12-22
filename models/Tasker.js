@@ -1,19 +1,35 @@
 const { executeQuery } = require("../config/database");
 const { getReliabilityColor, getReliabilityLabel } = require("../utils/reliability");
+const ImageEncryption = require("../utils/imageEncryption");
+const sql = require('mssql');
+const { getPool } = require('../config/database');
+
+// Safe decrypt helper to avoid crashes if module/format differs
+const safeDecrypt = (value) => {
+  try {
+    if (!value) return value;
+    if (ImageEncryption && typeof ImageEncryption.decrypt === 'function') {
+      return ImageEncryption.decrypt(value);
+    }
+    return value;
+  } catch (_) {
+    return value;
+  }
+};
 
 class Tasker {
   //  tìm tất cả tasker với dịch vụ kèm theo
-  static async findAll(search = "", serviceId = "") {
+  static async findAll(search = "", serviceId = "", city = "") {
     try {
-      console.log('🔍 Tasker.findAll called with:', { search, serviceId });
+      console.log('🔍 Tasker.findAll called with:', { search, serviceId, city });
 
       const params = [];
       let paramIndex = 1;
 
       // Build WHERE conditions
       // Always filter: only active taskers, not banned users
-      let whereClause = `WHERE u.is_banned = 0 AND (t.status IS NULL OR t.status = 'Active')`;
-      
+      let whereClause = `WHERE u.is_banned = 0 AND (t.status IS NULL OR t.status = N'Hoạt động')`;
+
       // Search condition - only search in tasker name to avoid filtering out taskers without services
       if (search && search.trim()) {
         // Case-insensitive search - SQL Server LIKE is case-insensitive by default for NVARCHAR
@@ -22,6 +38,17 @@ class Tasker {
         params.push(`%${search.trim()}%`);
         paramIndex++;
         console.log(`🔍 Search condition added: "${search.trim()}"`);
+      }
+
+      // City filter - search in address field
+      if (city && city.trim()) {
+        whereClause += ` AND EXISTS (
+          SELECT 1 FROM Addresses a
+          WHERE a.user_id = t.tasker_id AND UPPER(a.address) LIKE UPPER(@param${paramIndex})
+        )`;
+        params.push(`%${city.trim()}%`);
+        paramIndex++;
+        console.log(`🔍 City filter added: "${city.trim()}"`);
       }
 
       // Service filter - use EXISTS to filter taskers that have this service
@@ -39,11 +66,12 @@ class Tasker {
       let query = `
       SELECT 
         t.tasker_id,
+        u.avatar_url AS avatar,
         u.name AS tasker_name,
         t.Introduce AS Introduce,
         t.certifications,
         t.status,
-        ISNULL(t.rating, 0) AS rating,
+        ISNULL(rc.avg_rating, 0) AS rating,
         ISNULL(t.reliability_score, 100) AS reliability_score,
         ISNULL(rc.review_count, 0) AS reviewsCount,
         s.service_id,
@@ -59,8 +87,11 @@ class Tasker {
       LEFT JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
       LEFT JOIN Services s ON sv.service_id = s.service_id
       LEFT JOIN (
-        SELECT reviewee_id, COUNT(*) AS review_count
+        SELECT reviewee_id, 
+               COUNT(*) AS review_count,
+               AVG(CAST(rating AS FLOAT)) AS avg_rating
         FROM Ratings
+        WHERE status = 1
         GROUP BY reviewee_id
       ) rc ON t.tasker_id = rc.reviewee_id
       ${whereClause}
@@ -69,10 +100,10 @@ class Tasker {
 
       console.log('🔍 SQL Query:', query);
       console.log('🔍 SQL Params:', params);
-      
+
       const result = await executeQuery(query, params);
       const rows = result.recordset || [];
-      
+
       console.log('📊 Raw rows from DB:', rows.length);
       if (rows.length > 0) {
         console.log('📊 First row:', rows[0]);
@@ -89,6 +120,7 @@ class Tasker {
           const score = row.reliability_score || 0;
           taskersMap[row.tasker_id] = {
             tasker_id: row.tasker_id,
+            avatar: safeDecrypt(row.avatar),
             name: row.tasker_name,
             Introduce: row.Introduce,
             certifications: row.certifications,
@@ -150,21 +182,31 @@ class Tasker {
   // Cập nhật trạng thái hoạt động của tasker
   static async updateStatus(taskerId, status) {
     console.log("🔥 [DEBUG] updateStatus() CALLED:", { taskerId, status });
-    console.log("📌 [Stack]\n", new Error().stack);
 
-    // 👇 DÙNG ENUM ĐÚNG VỚI DATABASE
-    const ALLOWED = ["Active", "Inactive", "Banned"];
-
+    const ALLOWED = ["Hoạt động", "Không hoạt động", "Bị chặn"];
     if (!ALLOWED.includes(status)) {
       console.error("❌ [ERROR] Status KHÔNG hợp lệ:", status);
-      return false; // chặn lại không cho chạy xuống SQL
+      return false;
     }
 
-    const query = `UPDATE Taskers SET status = @param1 WHERE tasker_id = @param2`;
-    console.log("🔵 SQL RUN:", query, [status, taskerId]);
+    try {
+      const pool = await getPool(); // ✅ lấy pool kết nối
+      const request = pool.request();
 
-    await executeQuery(query, [status, taskerId]);
-    return true;
+      request.input("status", sql.NVarChar, status.trim());
+      request.input("taskerId", sql.Int, taskerId);
+
+      await request.query(`
+        UPDATE Taskers 
+        SET status = @status 
+        WHERE tasker_id = @taskerId
+      `);
+
+      return true;
+    } catch (err) {
+      console.error("❌ [ERROR] updateStatus failed:", err);
+      return false;
+    }
   }
 
   // Lấy danh sách tasker theo variant_id (liên kết qua TaskerServiceVariants)
@@ -173,12 +215,13 @@ class Tasker {
       const query = `
         SELECT 
           t.tasker_id,
+          u.avatar_url AS avatar,
           u.name AS tasker_name,
           u.email AS email,
           t.Introduce AS Introduce,
           t.certifications,
           t.status,
-          ISNULL(t.rating, 0) AS rating,
+          ISNULL(rc.avg_rating, 0) AS rating,
           ISNULL(t.reliability_score, 100) AS reliability_score,
           ISNULL(rc.review_count, 0) AS reviewsCount,
           s.service_id,
@@ -194,8 +237,11 @@ class Tasker {
         JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
         JOIN Services s ON sv.service_id = s.service_id
         LEFT JOIN (
-          SELECT reviewee_id, COUNT(*) AS review_count
+          SELECT reviewee_id, 
+                 COUNT(*) AS review_count,
+                 AVG(CAST(rating AS FLOAT)) AS avg_rating
           FROM Ratings
+          WHERE status = 1
           GROUP BY reviewee_id
         ) rc ON t.tasker_id = rc.reviewee_id
         WHERE sv.variant_id = @param1
@@ -210,6 +256,7 @@ class Tasker {
           const score = row.reliability_score || 0;
           taskersMap[row.tasker_id] = {
             tasker_id: row.tasker_id,
+            avatar: safeDecrypt(row.avatar),
             name: row.tasker_name,
             Introduce: row.Introduce,
             certifications: row.certifications,
@@ -263,7 +310,11 @@ class Tasker {
       `;
       const result = await executeQuery(query, [id]);
       if (!result.recordset.length) return null;
-      return result.recordset[0];
+      const row = result.recordset[0];
+      return {
+        ...row,
+        avatar: safeDecrypt(row.avatar_url),
+      };
     } catch (error) {
       throw new Error(`Lỗi lấy tasker theo ID: ${error.message}`);
     }

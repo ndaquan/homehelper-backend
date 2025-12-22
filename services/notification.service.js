@@ -21,7 +21,8 @@ async function notify(io, { user_id, title, content, type = 'system', data = nul
     payment: 'Payment',
     message: 'Message',
     system: 'System',
-    sos: 'Booking' // store as Booking, FE can use data.is_sos to render
+    sos: 'Booking', // store as Booking, FE can use data.is_sos to render
+    rating: 'rating' // explicit rating type for DB
   };
   const dbType = dbTypeMap[normType] || 'System';
   const notification = await Notification.create({
@@ -59,8 +60,41 @@ async function fetchUserNames({ customer_id, tasker_id }) {
   };
 }
 
+// Rating notifications (customer rates tasker)
+async function notifyRatingEvent(io, { booking_id, reviewer_id, reviewee_id, rating, comment }) {
+  try {
+    const { customer_name, tasker_name } = await fetchUserNames({ customer_id: reviewer_id, tasker_id: reviewee_id });
+    const title = 'Bạn vừa nhận một đánh giá';
+    const content = `${customer_name || 'Khách hàng'} đã đánh giá ${Number(rating)}★ cho đơn #${booking_id}.`;
+    const data = {
+      booking_id,
+      reviewer_id,
+      reviewee_id,
+      rating: Number(rating),
+      comment,
+      url: `${CLIENT_BASE_URL}/ratings`
+    };
+    return notify(io, {
+      user_id: reviewee_id,
+      type: 'rating',
+      title,
+      content,
+      data
+    });
+  } catch (e) {
+    // Fall back: send minimal payload
+    return notify(io, {
+      user_id: reviewee_id,
+      type: 'rating',
+      title: 'Bạn vừa nhận một đánh giá',
+      content: `Khách hàng đã đánh giá ${Number(rating)}★ cho đơn #${booking_id}.`,
+      data: { booking_id, reviewer_id, reviewee_id, rating: Number(rating), comment }
+    });
+  }
+}
+
 // Booking event notifications
-async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_id, service_name, amount }) {
+async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_id, service_name, amount, cancelledBy, refundAmount, compensationAmount }) {
   const { customer_name, tasker_name } = await fetchUserNames({ customer_id, tasker_id });
   const baseData = { booking_id, action, customer_id, tasker_id, customer_name, tasker_name };
   switch (action) {
@@ -70,7 +104,7 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         type: 'booking',
         title: `Đã tạo yêu cầu dịch vụ${service_name ? ' - ' + service_name : ''}`,
         content: `Đơn #${booking_id} đã được tạo cho ${customer_name || 'khách hàng'}. Chúng tôi sẽ thông báo khi tasker nhận việc.`,
-        data: { ...baseData, url: `${CLIENT_BASE_URL}/customer/bookings` }
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/customer/booking/${booking_id}` }
       });
     case 'created_tasker':
       return notify(io, {
@@ -102,7 +136,7 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         type: 'booking',
         title: 'Công việc đã hoàn thành',
         content: `${tasker_name || 'Tasker'} đã hoàn thành đơn #${booking_id}. Vui lòng kiểm tra và thanh toán nếu còn thiếu.`,
-        data: baseData
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/customer/booking/${booking_id}` }
       });
     case 'paid':
       return notify(io, {
@@ -112,6 +146,27 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
         content: `${customer_name || 'Khách'} đã thanh toán cho đơn #${booking_id}${amount ? ` (${amount.toLocaleString('vi-VN')}₫)` : ''}.`,
         data: { ...baseData, amount, url: `${CLIENT_BASE_URL}/tasker/bookings/${booking_id}` }
       });
+    case 'cancelled': {
+      // Notify customer
+      await notify(io, {
+        user_id: customer_id,
+        type: 'booking',
+        title: 'Đơn dịch vụ đã hủy',
+        content: `Đơn #${booking_id} đã được hủy${cancelledBy ? ` (bởi ${cancelledBy})` : ''}.`,
+        data: { ...baseData, cancelledBy, refundAmount, compensationAmount, url: `${CLIENT_BASE_URL}/customer/bookings` }
+      });
+      // Notify tasker
+      if (tasker_id) {
+        await notify(io, {
+          user_id: tasker_id,
+          type: 'booking',
+          title: 'Đơn dịch vụ đã hủy',
+          content: `Đơn #${booking_id} đã bị hủy${cancelledBy ? ` (bởi ${cancelledBy})` : ''}.`,
+          data: { ...baseData, cancelledBy, refundAmount, compensationAmount, url: `${CLIENT_BASE_URL}/tasker/bookings/${booking_id}` }
+        });
+      }
+      return;
+    }
     default:
       return notify(io, {
         user_id: customer_id,
@@ -122,78 +177,157 @@ async function notifyBookingEvent(io, { action, booking_id, customer_id, tasker_
       });
   }
 }
-    // SOS booking notifications (notify customer + all matching taskers)
-    async function notifySosRequestToTaskers(io, { booking_id, customer_id, variant_id, service_id, location }) {
-      try {
-        // Get customer name
-        const { customer_name } = await fetchUserNames({ customer_id });
+// Quote event notifications
+async function notifyQuoteEvent(io, { action, quote_id, post_id, customer_id, tasker_id, variant_id, proposed_price }) {
+  const { customer_name, tasker_name } = await fetchUserNames({ customer_id, tasker_id });
+  const baseData = { quote_id, post_id, customer_id, tasker_id, customer_name, tasker_name, variant_id, proposed_price };
+  switch (action) {
+    case 'sent':
+      // Tasker sent a quote -> notify customer (post owner)
+      return notify(io, {
+        user_id: customer_id,
+        type: 'message',
+        title: 'Bạn có yêu cầu làm việc mới',
+        content: `${tasker_name || 'Tasker'} đã gửi báo giá cho bài viết #${post_id} với giá ${Number(proposed_price).toLocaleString('vi-VN')}₫`,
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/blog/${post_id}/quotes` }
+      });
+    case 'accepted':
+      // Customer accepted a quote -> notify tasker
+      return notify(io, {
+        user_id: tasker_id,
+        type: 'message',
+        title: 'Yêu cầu làm việc được chấp nhận',
+        content: `${customer_name || 'Khách hàng'} đã chấp nhận yêu cầu làm việc của bạn cho bài viết #${post_id}.`,
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/tasker/bookings` }
+      });
+    case 'rejected':
+      // Customer rejected a quote -> notify tasker
+      return notify(io, {
+        user_id: tasker_id,
+        type: 'message',
+        title: 'Yêu cầu làm việc bị từ chối',
+        content: `${customer_name || 'Khách hàng'} đã từ chối yêu cầu làm việc của bạn cho bài viết #${post_id}.`,
+        data: { ...baseData, url: `${CLIENT_BASE_URL}/blog/${post_id}` }
+      });
+    default:
+      return;
+  }
+}
+// SOS booking notifications (notify customer + all matching taskers)
+async function notifySosRequestToTaskers(io, { booking_id, customer_id, variant_id, service_id, location }) {
+  try {
+    // Get customer name
+    const { customer_name } = await fetchUserNames({ customer_id });
 
-        // Notify the customer that SOS request has been dispatched
-        await notify(io, {
-          user_id: customer_id,
-          type: 'sos',
-          title: 'Đã gửi yêu cầu SOS',
-          content: 'Yêu cầu SOS của bạn đã được gửi đến các tasker phù hợp. Vui lòng chờ người nhận.',
-          data: {
-            booking_id,
-            customer_id,
-            customer_name,
-            variant_id,
-            service_id,
-            location
-          }
-        });
-
-        // Find taskers who can handle this variant (and optionally are active)
-        const taskersRes = await executeQuery(
-          `SELECT DISTINCT tsv.tasker_id, u.name
-           FROM TaskerServiceVariants tsv
-           JOIN Users u ON u.user_id = tsv.tasker_id
-           WHERE tsv.variant_id = @param1`,
-          [variant_id]
-        );
-
-        const rows = taskersRes.recordset || [];
-        const dataPayload = {
-          booking_id,
-          customer_id,
-          customer_name,
-          variant_id,
-          service_id,
-          location,
-          url: `${CLIENT_BASE_URL}/tasker/bookings`
-        };
-
-        // Send individual notifications (allows per-user persistence & future unread counts)
-        for (const r of rows) {
-          await notify(io, {
-            user_id: r.tasker_id,
-            type: 'sos',
-            title: 'Yêu cầu SOS mới',
-            content: `Khách hàng ${customer_name || ''} cần gấp dịch vụ. Đơn #${booking_id}.`,
-            data: dataPayload
-          });
-        }
-
-        // Emit targeted 'sos_created' only to matching taskers (avoid notifying all users)
-        try {
-          const payload = { booking_id, customer_id, customer_name, variant_id, service_id, location };
-          for (const r of rows) {
-            const room = `user_${r.tasker_id}`;
-            io && io.to && io.to(room).emit('sos_created', payload);
-          }
-        } catch {}
-
-        return { sent_to_taskers: rows.length };
-      } catch (err) {
-        console.error('[notifySosRequestToTaskers] Error:', err);
-        return { sent_to_taskers: 0, error: err.message };
+    // Notify the customer that SOS request has been dispatched
+    await notify(io, {
+      user_id: customer_id,
+      type: 'sos',
+      title: 'Đã gửi yêu cầu SOS',
+      content: 'Yêu cầu SOS của bạn đã được gửi đến các tasker phù hợp. Vui lòng chờ người nhận.',
+      data: {
+        booking_id,
+        customer_id,
+        customer_name,
+        variant_id,
+        service_id,
+        location
       }
+    });
+
+    // Find taskers who can handle this SERVICE (not just variant)
+    // Parse lat/lng from location string (format: "lat,lng")
+    let lat = 0, lng = 0;
+    if (location && location.includes(',')) {
+      [lat, lng] = location.split(',').map(n => parseFloat(n.trim()));
     }
 
+    // Find taskers who can handle this SERVICE (not just variant) within 15km
+    let taskerQuery = `
+      SELECT DISTINCT tsv.tasker_id, u.name
+      FROM TaskerServiceVariants tsv
+      JOIN ServiceVariants sv ON tsv.variant_id = sv.variant_id
+      JOIN Users u ON u.user_id = tsv.tasker_id
+      JOIN Addresses a ON u.user_id = a.user_id
+      WHERE sv.service_id = @param1
+        AND a.lat != 0 AND a.lng != 0
+    `;
+
+    if (lat && lng) {
+      taskerQuery += `
+        AND (6371000 * 2 * ATN2(SQRT(
+          SIN(RADIANS(a.lat - @param2)/2) * SIN(RADIANS(a.lat - @param2)/2) + 
+          COS(RADIANS(@param2)) * COS(RADIANS(a.lat)) * 
+          SIN(RADIANS(a.lng - @param3)/2) * SIN(RADIANS(a.lng - @param3)/2)
+        ), SQRT(1 - (
+          SIN(RADIANS(a.lat - @param2)/2) * SIN(RADIANS(a.lat - @param2)/2) + 
+          COS(RADIANS(@param2)) * COS(RADIANS(a.lat)) * 
+          SIN(RADIANS(a.lng - @param3)/2) * SIN(RADIANS(a.lng - @param3)/2)
+        )))) <= 15000
+      `;
+    }
+
+    const taskersRes = await executeQuery(taskerQuery, [service_id, lat, lng]);
+
+    const rows = taskersRes.recordset || [];
+    const dataPayload = {
+      booking_id,
+      customer_id,
+      customer_name,
+      variant_id,
+      service_id,
+      location,
+      url: `${CLIENT_BASE_URL}/tasker/bookings`
+    };
+
+    // Send individual notifications (allows per-user persistence & future unread counts)
+    for (const r of rows) {
+      await notify(io, {
+        user_id: r.tasker_id,
+        type: 'sos',
+        title: 'Yêu cầu SOS mới',
+        content: `Khách hàng ${customer_name || ''} cần gấp dịch vụ. Đơn #${booking_id}.`,
+        data: dataPayload
+      });
+    }
+
+    // Emit targeted 'sos_created' only to matching taskers (avoid notifying all users)
+    try {
+      const payload = { booking_id, customer_id, customer_name, variant_id, service_id, location };
+      for (const r of rows) {
+        const room = `user_${r.tasker_id}`;
+        io && io.to && io.to(room).emit('sos_created', payload);
+      }
+    } catch { }
+
+    return { sent_to_taskers: rows.length };
+  } catch (err) {
+    console.error('[notifySosRequestToTaskers] Error:', err);
+    return { sent_to_taskers: 0, error: err.message };
+  }
+}
+
+// Withdrawal notifications
+async function notifyWithdrawalEvent(io, { user_id, amount, status, admin_note }) {
+  const title = status === 'completed' ? 'Yêu cầu rút tiền thành công' : 'Yêu cầu rút tiền bị từ chối';
+  const content = status === 'completed'
+    ? `Yêu cầu rút ${(amount * 1000).toLocaleString('vi-VN')}₫ của bạn đã được duyệt và chuyển khoản thành công.`
+    : `Yêu cầu rút ${(amount * 1000).toLocaleString('vi-VN')}₫ của bạn đã bị từ chối. Lý do: ${admin_note || 'Không có lý do cụ thể'}`;
+
+  return notify(io, {
+    user_id,
+    type: 'payment',
+    title,
+    content,
+    data: { amount, status, admin_note, url: `${CLIENT_BASE_URL}/withdraw-history` }
+  });
+}
 
 module.exports = {
   notify,
   notifyBookingEvent,
   notifySosRequestToTaskers,
+  notifyQuoteEvent,
+  notifyRatingEvent,
+  notifyWithdrawalEvent,
 };
