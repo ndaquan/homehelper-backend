@@ -232,6 +232,7 @@ class BookingController {
           COALESCE(ts.checklist, '') AS task_checklist,
           COALESCE(ts.completed, 0) AS task_completed,
           ts.checklist_timers AS checklist_timers,
+          ts.photos AS task_photos,
 
           /* CUSTOMER INFO */
           u.name AS customer_name,
@@ -818,7 +819,12 @@ class BookingController {
             /* Tasker specific from Taskers table */
             tkr.signature_url AS tasker_signature_url,
             tkr.Introduce AS tasker_introduce,
-            tkr.rating AS tasker_rating
+            tkr.rating AS tasker_rating,
+
+            /* TASK INFO */
+            ts.description AS task_description,
+            ts.checklist AS task_checklist,
+            ts.photos AS task_photos
             
           FROM Bookings b
           LEFT JOIN Services s ON b.service_id = s.service_id
@@ -826,6 +832,7 @@ class BookingController {
           LEFT JOIN Users uc ON b.customer_id = uc.user_id
           LEFT JOIN Users ut ON b.tasker_id = ut.user_id
           LEFT JOIN Taskers tkr ON b.tasker_id = tkr.tasker_id
+          LEFT JOIN Tasks ts ON b.booking_id = ts.booking_id
           WHERE b.booking_id = @bookingId
       `;
 
@@ -879,10 +886,10 @@ class BookingController {
       }
 
       await executeQuery(
-        `UPDATE Bookings SET final_price = @param1 WHERE booking_id = @param2`,
+        `UPDATE Bookings SET base_price = @param1 WHERE booking_id = @param2`,
         [Number(price), bookingId]
       );
-      return res.json({ success: true, bookingId, final_price: Number(price) });
+      return res.json({ success: true, bookingId, base_price: Number(price) });
     } catch (error) {
       console.error('❌ Error updating booking final price:', error);
       return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -1226,29 +1233,29 @@ class BookingController {
     }
   }
 
-static async getTaskerEarningsSeries(req, res) {
-  try {
-    const taskerId = req.user?.userId;
-    if (!taskerId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
-    }
+  static async getTaskerEarningsSeries(req, res) {
+    try {
+      const taskerId = req.user?.userId;
+      if (!taskerId) {
+        return res.status(401).json({ success: false, message: 'Unauthorized' });
+      }
 
-    const granularity = (req.query.granularity || 'month').toLowerCase();
-    const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
+      const granularity = (req.query.granularity || 'month').toLowerCase();
+      const periods = Math.max(1, Math.min(24, parseInt(req.query.periods || '6', 10)));
 
-    // 🔹 GIỮ NGUYÊN LOGIC TIME HIỆN TẠI
-    const timeCol = 'ISNULL(end_time, start_time)';
+      // 🔹 GIỮ NGUYÊN LOGIC TIME HIỆN TẠI
+      const timeCol = 'ISNULL(end_time, start_time)';
 
-    let dateFilter = `${timeCol} >= DATEADD(month, -@periods, SYSUTCDATETIME())`;
-    if (granularity === 'week') {
-      dateFilter = `${timeCol} >= DATEADD(week, -@periods, SYSUTCDATETIME())`;
-    }
-    if (granularity === 'quarter') {
-      dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, SYSUTCDATETIME())`;
-    }
+      let dateFilter = `${timeCol} >= DATEADD(month, -@periods, SYSUTCDATETIME())`;
+      if (granularity === 'week') {
+        dateFilter = `${timeCol} >= DATEADD(week, -@periods, SYSUTCDATETIME())`;
+      }
+      if (granularity === 'quarter') {
+        dateFilter = `${timeCol} >= DATEADD(quarter, -@periods, SYSUTCDATETIME())`;
+      }
 
-    // 🔹 LOGIC GIÁ ĐÃ SỬA ĐÚNG
-    const priceExpr = `
+      // 🔹 LOGIC GIÁ ĐÃ SỬA ĐÚNG
+      const priceExpr = `
       (
         CASE
           WHEN final_price IS NULL OR final_price = 0
@@ -1258,11 +1265,11 @@ static async getTaskerEarningsSeries(req, res) {
       ) * ISNULL(quantity, 1) * 0.9
     `;
 
-    let sql = '';
+      let sql = '';
 
-    // ===== WEEK =====
-    if (granularity === 'week') {
-      sql = `
+      // ===== WEEK =====
+      if (granularity === 'week') {
+        sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
@@ -1283,11 +1290,11 @@ static async getTaskerEarningsSeries(req, res) {
         FROM G
         ORDER BY y ASC, x ASC
       `;
-    }
+      }
 
-    // ===== QUARTER =====
-    else if (granularity === 'quarter') {
-      sql = `
+      // ===== QUARTER =====
+      else if (granularity === 'quarter') {
+        sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
@@ -1308,11 +1315,11 @@ static async getTaskerEarningsSeries(req, res) {
         FROM G
         ORDER BY y ASC, x ASC
       `;
-    }
+      }
 
-    // ===== MONTH (DEFAULT) =====
-    else {
-      sql = `
+      // ===== MONTH (DEFAULT) =====
+      else {
+        sql = `
         WITH G AS (
           SELECT
             YEAR(${timeCol}) AS y,
@@ -1333,16 +1340,16 @@ static async getTaskerEarningsSeries(req, res) {
         FROM G
         ORDER BY y ASC, x ASC
       `;
+      }
+
+      const result = await executeQuery(sql, { taskerId, periods });
+      return res.json({ success: true, data: result.recordset || [] });
+
+    } catch (err) {
+      console.error('❌ getTaskerEarningsSeries:', err);
+      return res.status(500).json({ success: false, message: 'Internal server error' });
     }
-
-    const result = await executeQuery(sql, { taskerId, periods });
-    return res.json({ success: true, data: result.recordset || [] });
-
-  } catch (err) {
-    console.error('❌ getTaskerEarningsSeries:', err);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
-}
 
   // Bookings by month: completed vs pending-like
   static async getTaskerBookingsMonthly(req, res) {
