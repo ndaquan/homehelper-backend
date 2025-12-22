@@ -922,6 +922,29 @@ exports.upgradeToTasker = async (req, res) => {
     if (!userId) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
+    // BE enforcement: require CCCD Verified before allowing upgrade
+    try {
+      const cccdRes = await executeQuery("SELECT cccd_status FROM Users WHERE user_id = @param1", [userId]);
+      const cccdRow = cccdRes.recordset && cccdRes.recordset[0];
+      const rawStatus = cccdRow ? (cccdRow.cccd_status || '') : '';
+      const normalize = (s) => (s || '').toString().trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/[^a-z0-9]+/g, ' ').trim();
+      const n = normalize(rawStatus);
+      const isVerified = (
+        n === 'da xac minh' ||
+        n === 'verified' ||
+        n === 'xac minh' // tolerate simplified labels
+      );
+      if (!isVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vui lòng xác minh CCCD trước khi đăng ký làm Tasker',
+          cccd_status: rawStatus || null
+        });
+      }
+    } catch (cccdErr) {
+      // If we cannot read CCCD status, fail closed for safety
+      return res.status(400).json({ success: false, message: 'Không thể kiểm tra trạng thái CCCD. Vui lòng thử lại sau.' });
+    }
     // Support both JSON and multipart form-data
     let introduce = "";
     let variant_ids = [];
@@ -1281,13 +1304,19 @@ exports.getMyTaskerApplicationStatus = async (req, res) => {
     try {
       await executeQuery("IF OBJECT_ID('TaskerApplications','U') IS NULL BEGIN CREATE TABLE TaskerApplications (application_id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, introduce NVARCHAR(MAX), variants_json NVARCHAR(MAX), certifications_json NVARCHAR(MAX), video_json NVARCHAR(MAX), status NVARCHAR(50) NOT NULL DEFAULT 'Pending', created_at DATETIME DEFAULT SYSUTCDATETIME(), reviewed_at DATETIME NULL, reviewer_id INT NULL, note NVARCHAR(MAX) NULL) END", []);
     } catch (_) { }
+    // Fetch CCCD status for user to help FE gating
+    let userCccdStatus = null;
+    try {
+      const rs = await executeQuery('SELECT cccd_status FROM Users WHERE user_id=@param1', [userId]);
+      if (rs.recordset && rs.recordset.length) userCccdStatus = rs.recordset[0].cccd_status || null;
+    } catch (_) { }
     const r = await executeQuery("SELECT TOP 1 application_id, status, created_at, reviewed_at, note FROM TaskerApplications WHERE user_id=@param1 ORDER BY application_id DESC", [userId]);
     if (process.env.NODE_ENV !== 'production') {
       console.log('[getMyTaskerApplicationStatus] userId:', userId, 'result:', r.recordset);
     }
-    if (!r.recordset.length) return res.json({ success: true, data: { hasApplication: false, status: null } });
+    if (!r.recordset.length) return res.json({ success: true, data: { hasApplication: false, status: null, user_cccd_status: userCccdStatus } });
     const row = r.recordset[0];
-    return res.json({ success: true, data: { hasApplication: true, application_id: row.application_id, status: row.status, created_at: row.created_at, reviewed_at: row.reviewed_at, note: row.note } });
+    return res.json({ success: true, data: { hasApplication: true, application_id: row.application_id, status: row.status, created_at: row.created_at, reviewed_at: row.reviewed_at, note: row.note, user_cccd_status: userCccdStatus } });
   } catch (e) {
     console.error('getMyTaskerApplicationStatus error', e);
     res.status(500).json({ success: false, message: 'Lỗi lấy trạng thái đơn', error: e.message });
